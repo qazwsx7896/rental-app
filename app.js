@@ -558,17 +558,36 @@ function openEditPaymentModal(paymentId) {
 
 function openAssignPaymentModal(paymentId) {
   const payment = STATE.payments.find(p => p.PaymentID === paymentId);
-  const pendingBills = (STATE.bills || []).filter(b => b.Status === '待繳');
+  let pendingBills = (STATE.bills || []).filter(b => b.Status === '待繳');
   if (pendingBills.length === 0) {
     openModal('指派收款', `<div class="empty-state"><div class="icon">📭</div><div class="msg">目前沒有待繳帳單可供指派</div></div>`);
     return;
   }
+
+  // 金額剛好對得上的排最前面，方便一眼找到最可能的那筆
+  pendingBills = pendingBills.slice().sort((a, b) => {
+    const aMatch = Number(a.Amount) === Number(payment.Amount) ? 0 : 1;
+    const bMatch = Number(b.Amount) === Number(payment.Amount) ? 0 : 1;
+    return aMatch - bMatch;
+  });
+
   openModal(`指派收款 ${fmtMoney(payment.Amount)}`, `
     <div class="field">
-      <label>選擇要核銷的帳單</label>
-      <select id="assign-bill-select">
-        ${pendingBills.map(b => `<option value="${b.BillID}">${b.RoomNo} 房 · ${b.Type} · ${fmtMoney(b.Amount)}（${b.PeriodLabel}）</option>`).join('')}
-      </select>
+      <label>選擇要核銷的帳單（金額相符的排最上面）</label>
+      <div id="assign-bill-list">
+        ${pendingBills.map((b, i) => {
+          const isMatch = Number(b.Amount) === Number(payment.Amount);
+          return `
+          <label class="card" style="display:flex;align-items:center;gap:10px;cursor:pointer;${isMatch ? 'border-color:var(--primary);' : ''}">
+            <input type="radio" name="assign-bill" value="${b.BillID}" ${i === 0 ? 'checked' : ''} style="width:18px;height:18px;flex-shrink:0;">
+            <div style="flex:1;">
+              <div style="font-weight:700;">${b.RoomNo} 房 · ${b.Type} ${isMatch ? '<span class="badge success">✓ 金額相符</span>' : ''}</div>
+              <div class="hint">${b.PeriodLabel}</div>
+            </div>
+            <div class="num" style="font-weight:800;">${fmtMoney(b.Amount)}</div>
+          </label>`;
+        }).join('')}
+      </div>
     </div>
     <div class="btn-row">
       <button class="btn btn-primary" id="btn-confirm-assign">確認核銷</button>
@@ -576,8 +595,9 @@ function openAssignPaymentModal(paymentId) {
     </div>
   `);
   document.getElementById('btn-confirm-assign').addEventListener('click', async () => {
-    const billId = document.getElementById('assign-bill-select').value;
-    const res = await apiPost('assignPayment', { paymentId, billId });
+    const selected = document.querySelector('input[name="assign-bill"]:checked');
+    if (!selected) { toast('請先選擇一筆帳單'); return; }
+    const res = await apiPost('assignPayment', { paymentId, billId: selected.value });
     if (res.ok) { toast('已核銷完成'); closeModal(); await refreshData(); renderAll(); }
     else toast('失敗：' + res.error);
   });
