@@ -406,7 +406,11 @@ function renderMeterRecentBills() {
             ${statusBadge}
           </div>
         </div>
-        ${b.Status === '待繳' ? `<button class="btn btn-outline btn-sm mark-paid" data-id="${b.BillID}" style="margin-top:8px;">標記為已繳</button>` : ''}
+        <div class="btn-row">
+          ${b.Status === '待繳' ? `<button class="btn btn-outline btn-sm mark-paid" data-id="${b.BillID}">標記為已繳</button>` : ''}
+          <button class="btn btn-outline btn-sm edit-bill" data-id="${b.BillID}">編輯</button>
+          <button class="btn btn-danger btn-sm delete-bill" data-id="${b.BillID}">刪除</button>
+        </div>
       </div>`;
   }).join('');
 
@@ -416,6 +420,41 @@ function renderMeterRecentBills() {
       if (res.ok) { toast('已標記為已繳'); await refreshData(); renderAll(); }
       else toast('失敗：' + res.error);
     });
+  });
+  el.querySelectorAll('.edit-bill').forEach(btn => {
+    btn.addEventListener('click', () => openBillEditModal(btn.dataset.id));
+  });
+  el.querySelectorAll('.delete-bill').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('確定要刪除這筆帳單嗎？此動作無法復原。')) return;
+      const res = await apiPost('deleteBill', { billId: btn.dataset.id });
+      if (res.ok) { toast('已刪除帳單'); await refreshData(); renderAll(); }
+      else toast('失敗：' + res.error);
+    });
+  });
+}
+
+function openBillEditModal(billId) {
+  const bill = (STATE.bills || []).find(b => b.BillID === billId);
+  if (!bill) { toast('找不到這筆帳單'); return; }
+  openModal(`編輯帳單（${bill.RoomNo} 房）`, `
+    <div class="field"><label>期別標籤</label><input id="eb-period" value="${bill.PeriodLabel || ''}"></div>
+    <div class="field"><label>明細內容</label><textarea id="eb-detail">${bill.DetailText || ''}</textarea></div>
+    <div class="field"><label>金額</label><input id="eb-amount" type="number" value="${bill.Amount || ''}"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-save-bill">儲存</button>
+    </div>
+  `);
+  document.getElementById('btn-save-bill').addEventListener('click', async () => {
+    const data = {
+      billId: billId,
+      periodLabel: document.getElementById('eb-period').value.trim(),
+      detailText: document.getElementById('eb-detail').value,
+      amount: Number(document.getElementById('eb-amount').value || 0)
+    };
+    const res = await apiPost('updateBill', data);
+    if (res.ok) { toast('已儲存'); closeModal(); await refreshData(); renderAll(); }
+    else toast('失敗：' + res.error);
   });
 }
 
@@ -440,14 +479,45 @@ function renderPayments() {
           <div class="amount num">${fmtMoney(p.Amount)}</div>
           <div class="time">${p.ReceivedTime ? new Date(p.ReceivedTime).toLocaleString('zh-TW') : ''}</div>
         </div>
-        <div class="btn-row" style="margin-top:0;">
-          <button class="btn btn-primary btn-sm" data-action="assign" data-id="${p.PaymentID}">指派帳單</button>
-        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary btn-sm" data-action="assign" data-id="${p.PaymentID}">指派帳單</button>
+        <button class="btn btn-outline btn-sm" data-action="edit" data-id="${p.PaymentID}">編輯金額</button>
+        <button class="btn btn-danger btn-sm" data-action="delete" data-id="${p.PaymentID}">刪除</button>
       </div>
     </div>`).join('');
 
   el.querySelectorAll('[data-action="assign"]').forEach(btn => {
     btn.addEventListener('click', () => openAssignPaymentModal(btn.dataset.id));
+  });
+  el.querySelectorAll('[data-action="edit"]').forEach(btn => {
+    btn.addEventListener('click', () => openEditPaymentModal(btn.dataset.id));
+  });
+  el.querySelectorAll('[data-action="delete"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('確定要刪除這筆收款紀錄嗎？')) return;
+      const res = await apiPost('deletePayment', { paymentId: btn.dataset.id });
+      if (res.ok) { toast('已刪除'); await refreshData(); renderAll(); }
+      else toast('失敗：' + res.error);
+    });
+  });
+}
+
+function openEditPaymentModal(paymentId) {
+  const payment = STATE.payments.find(p => p.PaymentID === paymentId);
+  if (!payment) { toast('找不到這筆收款紀錄'); return; }
+  openModal('編輯收款金額', `
+    <div class="field"><label>金額</label><input id="ep-amount" type="number" value="${payment.Amount || ''}"></div>
+    <div class="hint">原始擷取內容：${payment.RawText || '（無）'}</div>
+    <div class="btn-row" style="margin-top:10px;">
+      <button class="btn btn-primary" id="btn-save-payment">儲存</button>
+    </div>
+  `);
+  document.getElementById('btn-save-payment').addEventListener('click', async () => {
+    const amount = Number(document.getElementById('ep-amount').value || 0);
+    const res = await apiPost('updatePayment', { paymentId, amount });
+    if (res.ok) { toast('已儲存'); closeModal(); await refreshData(); renderAll(); }
+    else toast('失敗：' + res.error);
   });
 }
 
@@ -492,7 +562,7 @@ function initReportsTab() {
   document.getElementById('report-year').value = now.getFullYear();
   document.getElementById('report-month').addEventListener('change', renderReports);
   document.getElementById('report-year').addEventListener('change', renderReports);
-  document.getElementById('btn-add-expense').addEventListener('click', openExpenseForm);
+  document.getElementById('btn-add-expense').addEventListener('click', () => openExpenseForm());
   document.getElementById('btn-save-price').addEventListener('click', async () => {
     const val = document.getElementById('setting-elec-price').value;
     const res = await apiPost('updateSetting', { key: 'ElecUnitPrice', value: Number(val) });
@@ -533,29 +603,47 @@ function renderReports() {
     expEl.innerHTML = `<div class="empty-state"><div class="icon">🧾</div><div class="msg">尚無支出紀錄</div></div>`;
   } else {
     expEl.innerHTML = `<div class="card">` + recentExpenses.map(e => `
-      <div class="expense-row">
+      <div class="expense-row" data-id="${e.ExpenseID}">
         <span>${e.Date} · ${e.Category}${e.Note ? '（' + e.Note + '）' : ''}</span>
-        <span class="num">-${fmtMoney(e.Amount)}</span>
+        <span style="display:flex;align-items:center;gap:8px;">
+          <span class="num">-${fmtMoney(e.Amount)}</span>
+          <button class="btn-ghost edit-expense" data-id="${e.ExpenseID}" style="padding:2px 4px;width:auto;font-size:13px;">✏️</button>
+          <button class="btn-ghost delete-expense" data-id="${e.ExpenseID}" style="padding:2px 4px;width:auto;font-size:13px;color:var(--danger);">🗑️</button>
+        </span>
       </div>`).join('') + `</div>`;
+
+    expEl.querySelectorAll('.edit-expense').forEach(btn => {
+      btn.addEventListener('click', () => openExpenseForm(btn.dataset.id));
+    });
+    expEl.querySelectorAll('.delete-expense').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('確定要刪除這筆支出嗎？')) return;
+        const res = await apiPost('deleteExpense', { expenseId: btn.dataset.id });
+        if (res.ok) { toast('已刪除'); await refreshData(); renderAll(); }
+        else toast('失敗：' + res.error);
+      });
+    });
   }
 }
 
-function openExpenseForm() {
-  openModal('新增支出', `
-    <div class="field"><label>日期</label><input id="ex-date" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
+function openExpenseForm(expenseId) {
+  const isEdit = !!expenseId;
+  const ex = isEdit ? (STATE.expenses || []).find(e => e.ExpenseID === expenseId) : null;
+  openModal(isEdit ? '編輯支出' : '新增支出', `
+    <div class="field"><label>日期</label><input id="ex-date" type="date" value="${ex ? String(ex.Date).slice(0, 10) : new Date().toISOString().slice(0, 10)}"></div>
     <div class="field">
       <label>分類</label>
       <select id="ex-category">
-        <option>廣告刊登</option>
-        <option>維修保養</option>
-        <option>清潔耗材</option>
-        <option>稅金規費</option>
-        <option>其他雜項</option>
+        ${['廣告刊登', '維修保養', '清潔耗材', '稅金規費', '其他雜項'].map(c =>
+          `<option ${ex && ex.Category === c ? 'selected' : ''}>${c}</option>`).join('')}
       </select>
     </div>
-    <div class="field"><label>金額</label><input id="ex-amount" type="number"></div>
-    <div class="field"><label>備註</label><textarea id="ex-note" placeholder="例如：591 廣告、冷氣維修、買燈泡"></textarea></div>
-    <button class="btn btn-primary" id="btn-save-expense">儲存</button>
+    <div class="field"><label>金額</label><input id="ex-amount" type="number" value="${ex ? ex.Amount : ''}"></div>
+    <div class="field"><label>備註</label><textarea id="ex-note" placeholder="例如：591 廣告、冷氣維修、買燈泡">${ex ? ex.Note || '' : ''}</textarea></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-save-expense">儲存</button>
+      ${isEdit ? '<button class="btn btn-danger" id="btn-del-expense">刪除</button>' : ''}
+    </div>
   `);
   document.getElementById('btn-save-expense').addEventListener('click', async () => {
     const data = {
@@ -565,8 +653,18 @@ function openExpenseForm() {
       note: document.getElementById('ex-note').value.trim()
     };
     if (!data.amount) { toast('請輸入金額'); return; }
-    const res = await apiPost('addExpense', data);
-    if (res.ok) { toast('已新增支出'); closeModal(); await refreshData(); renderAll(); }
+    const res = isEdit
+      ? await apiPost('updateExpense', { ...data, expenseId })
+      : await apiPost('addExpense', data);
+    if (res.ok) { toast('已儲存'); closeModal(); await refreshData(); renderAll(); }
     else toast('失敗：' + res.error);
   });
+  if (isEdit) {
+    document.getElementById('btn-del-expense').addEventListener('click', async () => {
+      if (!confirm('確定要刪除這筆支出嗎？')) return;
+      const res = await apiPost('deleteExpense', { expenseId });
+      if (res.ok) { toast('已刪除'); closeModal(); await refreshData(); renderAll(); }
+      else toast('失敗：' + res.error);
+    });
+  }
 }
