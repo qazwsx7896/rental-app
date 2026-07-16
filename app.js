@@ -271,6 +271,11 @@ function openRoomForm(room) {
       </div>
       <div class="field"><label>每期租金金額</label><input id="f-rentAmount" type="number" value="${r.RentAmount || ''}"></div>
     </div>
+    <div class="field">
+      <label>${isEdit ? '目前電表讀數（可手動校正）' : '起始電表讀數'}</label>
+      <input id="f-lastMeterReading" type="number" value="${r.LastMeterReading || ''}" placeholder="例如 1234（入住當天抄表的數字）">
+      <div class="hint">${isEdit ? '如果之後要校正電表數字，可直接改這裡（不會產生帳單）' : '請填入房客入住當天，你自己抄下的電表讀數，之後第一次計費才會算得準'}</div>
+    </div>
     <div class="field"><label>備註</label><textarea id="f-note">${r.Note || ''}</textarea></div>
     <div class="btn-row">
       <button class="btn btn-primary" id="btn-save-room">儲存</button>
@@ -288,11 +293,12 @@ function openRoomForm(room) {
       contractEnd: document.getElementById('f-contractEnd').value,
       rentCycle: document.getElementById('f-rentCycle').value,
       rentAmount: Number(document.getElementById('f-rentAmount').value || 0),
+      lastMeterReading: Number(document.getElementById('f-lastMeterReading').value || 0),
       note: document.getElementById('f-note').value.trim()
     };
     if (!data.roomNo) { toast('請輸入房號'); return; }
     const res = isEdit ? await apiPost('updateRoom', data) : await apiPost('addRoom', {
-      ...data, lastMeterReading: 0, nextRentDueDate: data.contractStart
+      ...data, nextRentDueDate: data.contractStart
     });
     if (res.ok) { toast('已儲存'); closeModal(); await refreshData(); renderAll(); }
     else toast('失敗：' + res.error);
