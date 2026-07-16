@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0F6E6A">
+<title>租屋管理系統</title>
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<!-- 鎖定畫面 -->
+<div id="lock-screen">
+  <div class="lock-icon">🔒</div>
+  <h1>租屋管理系統</h1>
+  <p>請輸入密碼以解鎖使用</p>
+  <form id="lock-form">
+    <input id="lock-input" type="password" inputmode="numeric" maxlength="12" autocomplete="off" placeholder="••••••••">
+    <div id="lock-error"></div>
+    <button type="submit" class="lock-btn">解鎖</button>
+  </form>
+</div>
+
+<div id="app">
+  <header class="topbar">
+    <div>
+      <h1 id="topbar-title">總覽</h1>
+      <div class="subtitle" id="topbar-subtitle">房東儀表板</div>
+    </div>
+    <div id="topbar-badge"></div>
+  </header>
+
+  <!-- ================= 總覽 ================= -->
+  <section id="screen-dashboard" class="screen active">
+    <div id="dash-alerts"></div>
+    <div class="section-title">本月概況</div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="label">待繳帳單</div><div class="value num" id="stat-pending-bills">0</div></div>
+      <div class="stat-card"><div class="label">未分類收款</div><div class="value num warn" id="stat-unclassified">0</div></div>
+      <div class="stat-card"><div class="label">本月已收</div><div class="value num" id="stat-month-income">$0</div></div>
+      <div class="stat-card"><div class="label">即將到期</div><div class="value num danger" id="stat-expiring">0</div></div>
+    </div>
+    <div class="section-title">待繳帳單一覽</div>
+    <div id="dash-pending-bills"></div>
+  </section>
+
+  <!-- ================= 房客/合約 ================= -->
+  <section id="screen-rooms" class="screen">
+    <div id="rooms-list"></div>
+  </section>
+
+  <!-- ================= 抄表/帳單 ================= -->
+  <section id="screen-meter" class="screen">
+    <div class="section-title">選擇房間</div>
+    <div class="card">
+      <div class="field">
+        <label>房號</label>
+        <select id="meter-room-select"></select>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>上次電表</label>
+          <input id="meter-last" type="text" disabled>
+        </div>
+        <div class="field">
+          <label>本次電表數字</label>
+          <input id="meter-new" type="number" inputmode="decimal" placeholder="輸入本次讀數">
+        </div>
+      </div>
+      <div class="hint" id="meter-price-hint"></div>
+      <button class="btn btn-primary" id="btn-calc-bill" style="margin-top:10px;">計算並產生帳單</button>
+    </div>
+    <div id="meter-result"></div>
+    <div class="section-title">近期帳單紀錄</div>
+    <div id="meter-recent-bills"></div>
+  </section>
+
+  <!-- ================= 收款 ================= -->
+  <section id="screen-payments" class="screen">
+    <div class="section-title">未分類收款（銀行自動偵測）</div>
+    <div id="payments-list"></div>
+  </section>
+
+  <!-- ================= 報表 ================= -->
+  <section id="screen-reports" class="screen">
+    <div class="section-title">月度收支損益表</div>
+    <div class="card">
+      <div class="field">
+        <label>選擇月份</label>
+        <input id="report-month" type="month">
+      </div>
+      <div class="stat-grid" style="margin-top:8px;">
+        <div class="stat-card"><div class="label">收入</div><div class="value num" id="report-income">$0</div></div>
+        <div class="stat-card"><div class="label">支出</div><div class="value num danger" id="report-expense">$0</div></div>
+      </div>
+      <div class="stat-card" style="margin-top:10px;"><div class="label">淨利潤</div><div class="value num" id="report-profit">$0</div></div>
+    </div>
+
+    <div class="section-title">年度統計</div>
+    <div class="card">
+      <div class="field">
+        <label>選擇年度</label>
+        <input id="report-year" type="number" min="2000" max="2100">
+      </div>
+      <div class="stat-grid" style="margin-top:8px;">
+        <div class="stat-card"><div class="label">年總收入</div><div class="value num" id="year-income">$0</div></div>
+        <div class="stat-card"><div class="label">年總支出</div><div class="value num danger" id="year-expense">$0</div></div>
+      </div>
+      <div class="stat-card" style="margin-top:10px;"><div class="label">年淨利潤</div><div class="value num" id="year-profit">$0</div></div>
+    </div>
+
+    <div class="section-title">支出項目</div>
+    <div id="expense-list"></div>
+    <button class="btn btn-outline" id="btn-add-expense" style="margin-top:10px;">＋ 新增支出</button>
+
+    <div class="section-title">設定</div>
+    <div class="card">
+      <div class="field">
+        <label>電費單價（每度）</label>
+        <input id="setting-elec-price" type="number" step="0.1">
+      </div>
+      <button class="btn btn-outline btn-sm" id="btn-save-price">儲存單價</button>
+    </div>
+  </section>
+
+  <button class="fab" id="fab-add-room" title="新增房間">＋</button>
+</div>
+
+<nav class="tabbar">
+  <button data-screen="dashboard" class="active"><span class="icon">🏠</span>總覽</button>
+  <button data-screen="rooms"><span class="icon">🛏️</span>房客</button>
+  <button data-screen="meter"><span class="icon">⚡</span>抄表</button>
+  <button data-screen="payments"><span class="icon">💰</span>收款</button>
+  <button data-screen="reports"><span class="icon">📊</span>報表</button>
+</nav>
+
+<div class="toast" id="toast"></div>
+<div id="modal-root"></div>
+
+<script src="./app.js"></script>
+</body>
+</html>

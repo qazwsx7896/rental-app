@@ -1,0 +1,15 @@
+{
+  "name": "租屋管理系統",
+  "short_name": "租屋管理",
+  "description": "個人套房租賃管理：合約到期預警、電租合一帳單、銀行入帳自動化、收支報表",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0F6E6A",
+  "theme_color": "#0F6E6A",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
