@@ -221,13 +221,16 @@ function renderRooms() {
           ${badge}
         </div>
         <div class="tenant">👤 ${r.TenantName || '（空房）'} ${r.Phone ? ' · ' + r.Phone : ''}</div>
-        <div class="rent-line">💰 ${r.RentCycle || ''} $${r.RentAmount || 0}　押金 $${r.Deposit || 0}</div>
+        <div class="rent-line">💰 每月 $${r.RentAmount || 0}（${r.RentCycle || ''}）　押金 $${r.Deposit || 0}</div>
         <div class="meta-row">
           <span>合約：${r.ContractStart || '-'} ~ ${r.ContractEnd || '-'}</span>
         </div>
+        <div class="meta-row">
+          <span>房租已繳至：<strong>${r.NextRentDueDate || '尚未設定'}</strong></span>
+        </div>
         <div class="btn-row">
           <button class="btn btn-outline btn-sm" data-action="edit">編輯</button>
-          <button class="btn btn-outline btn-sm" data-action="rentbill">產生本期租金帳單</button>
+          <button class="btn btn-outline btn-sm" data-action="rentbill">產生租金帳單</button>
         </div>
       </div>`;
   }).join('');
@@ -238,11 +241,39 @@ function renderRooms() {
       const room = STATE.rooms.find(r => String(r.RoomNo) === String(roomNo));
       openRoomForm(room);
     });
-    card.querySelector('[data-action="rentbill"]').addEventListener('click', async () => {
-      const res = await apiPost('generateRentBill', { roomNo });
-      if (res.ok) { toast('已產生租金待繳帳單'); await refreshData(); renderAll(); }
-      else toast('失敗：' + res.error);
+    card.querySelector('[data-action="rentbill"]').addEventListener('click', () => {
+      const room = STATE.rooms.find(r => String(r.RoomNo) === String(roomNo));
+      openGenerateRentBillModal(room);
     });
+  });
+}
+
+function openGenerateRentBillModal(room) {
+  const cycleDefault = room.RentCycle === '雙月繳' ? 2 : (room.RentCycle === '季繳' ? 3 : 1);
+  openModal(`產生租金帳單 · ${room.RoomNo} 房`, `
+    <div class="hint" style="margin-bottom:10px;">房租已繳至：<strong>${room.NextRentDueDate || '尚未設定'}</strong>，請輸入這次要收幾個月的租金</div>
+    <div class="field">
+      <label>這次要收幾個月</label>
+      <input id="rb-months" type="number" min="1" value="${cycleDefault}">
+    </div>
+    <div class="hint" id="rb-preview"></div>
+    <div class="btn-row" style="margin-top:10px;">
+      <button class="btn btn-primary" id="btn-confirm-rentbill">產生帳單</button>
+    </div>
+  `);
+  const updatePreview = () => {
+    const months = Number(document.getElementById('rb-months').value || 1);
+    const amount = Number(room.RentAmount) * months;
+    document.getElementById('rb-preview').textContent = `本次金額：每月 $${room.RentAmount} × ${months} 個月 = $${amount}`;
+  };
+  document.getElementById('rb-months').addEventListener('input', updatePreview);
+  updatePreview();
+
+  document.getElementById('btn-confirm-rentbill').addEventListener('click', async () => {
+    const months = Number(document.getElementById('rb-months').value || 1);
+    const res = await apiPost('generateRentBill', { roomNo: room.RoomNo, months });
+    if (res.ok) { toast('已產生租金待繳帳單'); closeModal(); await refreshData(); renderAll(); }
+    else toast('失敗：' + res.error);
   });
 }
 
@@ -262,14 +293,19 @@ function openRoomForm(room) {
     </div>
     <div class="field-row">
       <div class="field">
-        <label>租金週期</label>
+        <label>租金週期（僅作為預設收款月數參考）</label>
         <select id="f-rentCycle">
           <option ${r.RentCycle === '月繳' ? 'selected' : ''}>月繳</option>
           <option ${r.RentCycle === '雙月繳' ? 'selected' : ''}>雙月繳</option>
           <option ${r.RentCycle === '季繳' ? 'selected' : ''}>季繳</option>
         </select>
       </div>
-      <div class="field"><label>每期租金金額</label><input id="f-rentAmount" type="number" value="${r.RentAmount || ''}"></div>
+      <div class="field"><label>每月租金金額</label><input id="f-rentAmount" type="number" value="${r.RentAmount || ''}"></div>
+    </div>
+    <div class="field">
+      <label>房租已繳至</label>
+      <input id="f-paidThrough" type="date" value="${r.NextRentDueDate ? String(r.NextRentDueDate).slice(0, 10) : (r.ContractStart ? String(r.ContractStart).slice(0, 10) : '')}">
+      <div class="hint">請填目前實際已經收到租金的最後一天，之後系統會依照你「產生租金帳單」時輸入的月數自動往後推進，不用擔心跟合約起始日對不齊</div>
     </div>
     <div class="field">
       <label>${isEdit ? '目前電表讀數（可手動校正）' : '起始電表讀數'}</label>
@@ -294,12 +330,11 @@ function openRoomForm(room) {
       rentCycle: document.getElementById('f-rentCycle').value,
       rentAmount: Number(document.getElementById('f-rentAmount').value || 0),
       lastMeterReading: Number(document.getElementById('f-lastMeterReading').value || 0),
+      nextRentDueDate: document.getElementById('f-paidThrough').value,
       note: document.getElementById('f-note').value.trim()
     };
     if (!data.roomNo) { toast('請輸入房號'); return; }
-    const res = isEdit ? await apiPost('updateRoom', data) : await apiPost('addRoom', {
-      ...data, nextRentDueDate: data.contractStart
-    });
+    const res = isEdit ? await apiPost('updateRoom', data) : await apiPost('addRoom', data);
     if (res.ok) { toast('已儲存'); closeModal(); await refreshData(); renderAll(); }
     else toast('失敗：' + res.error);
   });
