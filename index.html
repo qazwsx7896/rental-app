@@ -81,7 +81,14 @@
 
   <!-- ================= 收款 ================= -->
   <section id="screen-payments" class="screen">
-    <div class="section-title">未分類收款（銀行自動偵測）</div>
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:8px;">📸 上傳入帳截圖辨識</div>
+      <div class="hint" style="margin-bottom:10px;">拍照或選取入帳通知／帳務明細截圖，系統會自動辨識文字並加入未分類收款</div>
+      <input type="file" id="payment-photo-input" accept="image/*" capture="environment" style="display:none;">
+      <button class="btn btn-primary" id="btn-upload-payment-photo">選擇照片上傳</button>
+      <div id="payment-photo-status" class="hint" style="margin-top:8px;"></div>
+    </div>
+    <div class="section-title">未分類收款（銀行自動偵測 / 上傳辨識）</div>
     <div id="payments-list"></div>
   </section>
 
