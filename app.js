@@ -496,7 +496,51 @@ function openBillEditModal(billId) {
 /* ============================================================
  * 未分類收款
  * ============================================================ */
-function initPaymentsTab() {}
+function initPaymentsTab() {
+  const input = document.getElementById('payment-photo-input');
+  const statusEl = document.getElementById('payment-photo-status');
+  document.getElementById('btn-upload-payment-photo').addEventListener('click', () => input.click());
+
+  input.addEventListener('change', async () => {
+    const file = input.files[0];
+    if (!file) return;
+    statusEl.textContent = '辨識中，請稍候…（可能需要 5-15 秒）';
+
+    try {
+      const base64 = await fileToBase64_(file);
+      const res = await apiPost('ocrImportImage', { imageBase64: base64, mimeType: file.type || 'image/png' });
+      if (!res.ok) {
+        statusEl.textContent = '失敗：' + res.error;
+        toast('辨識失敗：' + res.error);
+      } else if (res.result.imported > 0) {
+        statusEl.textContent = `成功匯入 ${res.result.imported} 筆收款！`;
+        toast(`已匯入 ${res.result.imported} 筆收款`);
+        await refreshData();
+        renderAll();
+      } else {
+        statusEl.textContent = res.result.error || '沒有辨識到有效的收款資訊';
+        toast('沒有辨識到有效的收款資訊');
+      }
+    } catch (err) {
+      statusEl.textContent = '發生錯誤：' + err.message;
+      toast('上傳失敗，請再試一次');
+    }
+    input.value = '';
+  });
+}
+
+function fileToBase64_(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result; // data:image/png;base64,xxxx
+      const base64 = result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 function renderPayments() {
   const payments = (STATE.payments || [])
