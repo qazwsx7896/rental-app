@@ -497,6 +497,26 @@ function openBillEditModal(billId) {
  * 未分類收款
  * ============================================================ */
 function initPaymentsTab() {
+  const timeInput = document.getElementById('manual-payment-time');
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  timeInput.value = now.toISOString().slice(0, 16);
+
+  document.getElementById('btn-add-manual-payment').addEventListener('click', async () => {
+    const amount = Number(document.getElementById('manual-payment-amount').value || 0);
+    const receivedTime = document.getElementById('manual-payment-time').value;
+    if (!amount) { toast('請輸入金額'); return; }
+    const res = await apiPost('addManualPayment', { amount, receivedTime });
+    if (res.ok) {
+      toast('已新增收款');
+      document.getElementById('manual-payment-amount').value = '';
+      await refreshData();
+      renderAll();
+    } else {
+      toast('失敗：' + res.error);
+    }
+  });
+
   const input = document.getElementById('payment-photo-input');
   const statusEl = document.getElementById('payment-photo-status');
   document.getElementById('btn-upload-payment-photo').addEventListener('click', () => input.click());
