@@ -52,9 +52,11 @@ function toast(msg) {
 function fmtMoney(n) { return '$' + Math.round(Number(n) || 0).toLocaleString(); }
 function daysUntil(dateStr) {
   if (!dateStr) return null;
-  const target = new Date(String(dateStr).slice(0, 10));
-  const today = new Date(new Date().toDateString());
-  return Math.round((target - today) / 86400000);
+  const parts = String(dateStr).slice(0, 10).split('-').map(Number);
+  const targetUTC = Date.UTC(parts[0], parts[1] - 1, parts[2]);
+  const now = new Date();
+  const todayUTC = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((targetUTC - todayUTC) / 86400000);
 }
 function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
 function openModal(title, innerHtml) {
