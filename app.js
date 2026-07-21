@@ -143,10 +143,10 @@ function renderDashboard() {
   const bills = STATE.bills || [];
   const payments = STATE.payments || [];
 
-  // 合約到期預警（少於 30 天）
+  // 合約到期預警（少於 3 個月）
   const expiring = rooms
     .map(r => ({ room: r, days: daysUntil(r.ContractEnd) }))
-    .filter(x => x.days !== null && x.days < 30);
+    .filter(x => x.days !== null && x.days < 90);
 
   const alertsEl = document.getElementById('dash-alerts');
   if (expiring.length === 0) {
@@ -211,7 +211,7 @@ function renderRooms() {
   el.innerHTML = rooms.map(r => {
     const days = daysUntil(r.ContractEnd);
     let badge = '';
-    if (days !== null && days < 30) {
+    if (days !== null && days < 90) {
       badge = `<span class="badge warn">⚠ ${days < 0 ? '已到期' : days + ' 天後到期'}</span>`;
     }
     return `
