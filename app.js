@@ -355,8 +355,30 @@ function openRoomForm(room) {
  * 抄表 / 電租合一帳單
  * ============================================================ */
 function initMeterTab() {
-  document.getElementById('meter-room-select').addEventListener('change', updateMeterLastReading);
+  document.getElementById('meter-room-select').addEventListener('change', () => {
+    updateMeterLastReading();
+    updateRentPreview();
+  });
   document.getElementById('btn-calc-bill').addEventListener('click', calcAndGenerateBill);
+
+  const includeRentBox = document.getElementById('meter-include-rent');
+  const monthsWrap = document.getElementById('meter-rent-months-wrap');
+  includeRentBox.addEventListener('change', () => {
+    monthsWrap.style.display = includeRentBox.checked ? 'block' : 'none';
+    updateRentPreview();
+  });
+  document.getElementById('meter-rent-months').addEventListener('input', updateRentPreview);
+}
+
+function updateRentPreview() {
+  const includeRentBox = document.getElementById('meter-include-rent');
+  if (!includeRentBox.checked) return;
+  const roomNo = document.getElementById('meter-room-select').value;
+  const room = (STATE.rooms || []).find(r => String(r.RoomNo) === String(roomNo));
+  if (!room) return;
+  const months = Number(document.getElementById('meter-rent-months').value || 1);
+  const amount = Number(room.RentAmount) * months;
+  document.getElementById('meter-rent-preview').textContent = `這次租金：每月 $${room.RentAmount} × ${months} 個月 = $${amount}`;
 }
 
 function renderMeterRoomOptions() {
@@ -364,6 +386,7 @@ function renderMeterRoomOptions() {
   const rooms = (STATE.rooms || []).slice().sort((a, b) => String(a.RoomNo).localeCompare(String(b.RoomNo)));
   sel.innerHTML = rooms.map(r => `<option value="${r.RoomNo}">${r.RoomNo} 房 - ${r.TenantName || '空房'}</option>`).join('');
   updateMeterLastReading();
+  updateRentPreview();
   const price = STATE.settings ? STATE.settings.ElecUnitPrice : 5.5;
   document.getElementById('meter-price-hint').textContent = `目前電費單價：每度 $${price}（可於「報表」分頁修改）`;
 }
@@ -380,7 +403,10 @@ async function calcAndGenerateBill() {
   if (!roomNo) { toast('請先新增房間'); return; }
   if (!newReading) { toast('請輸入本次電表數字'); return; }
 
-  const res = await apiPost('recordMeterAndBill', { roomNo, newReading });
+  const includeRent = document.getElementById('meter-include-rent').checked;
+  const rentMonths = includeRent ? Number(document.getElementById('meter-rent-months').value || 1) : 0;
+
+  const res = await apiPost('recordMeterAndBill', { roomNo, newReading, rentMonths });
   if (!res.ok) { toast('失敗：' + res.error); return; }
 
   const r = res.result;
@@ -393,6 +419,8 @@ async function calcAndGenerateBill() {
   document.getElementById('btn-copy-bill').addEventListener('click', () => copyBillText(r.billText));
 
   document.getElementById('meter-new').value = '';
+  document.getElementById('meter-include-rent').checked = false;
+  document.getElementById('meter-rent-months-wrap').style.display = 'none';
   await refreshData();
   renderAll();
 }
