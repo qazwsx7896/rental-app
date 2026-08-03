@@ -434,22 +434,43 @@ function renderBatchMeterTable() {
     el.innerHTML = `<div class="empty-state"><div class="icon">🛏️</div><div class="msg">尚未新增房間</div></div>`;
     return;
   }
-  el.innerHTML = rooms.map((r, i) => `
+  el.innerHTML = rooms.map((r, i) => {
+    const cycleDefault = r.RentCycle === '雙月繳' ? 2 : (r.RentCycle === '季繳' ? 3 : 1);
+    const paidThrough = r.NextRentDueDate || '未設定';
+    const days = daysUntil(r.NextRentDueDate);
+    // 系統建議：已繳至日期在 30 天內到期或已過期，就預先勾選提醒這次順便收租（僅為建議，可自行調整）
+    const suggestCollect = days !== null && days <= 30;
+    let dueBadge;
+    if (days === null) {
+      dueBadge = `<span class="badge neutral">未設定已繳至</span>`;
+    } else if (days < 0) {
+      dueBadge = `<span class="badge danger">已繳至 ${paidThrough}（已到期 ${Math.abs(days)} 天）</span>`;
+    } else if (days <= 30) {
+      dueBadge = `<span class="badge warn">已繳至 ${paidThrough}（${days} 天內到期）</span>`;
+    } else {
+      dueBadge = `<span class="badge success">已繳至 ${paidThrough}（還有 ${days} 天）</span>`;
+    }
+    return `
     <div class="card" style="padding:10px 12px;">
       <div style="display:flex;align-items:center;gap:8px;">
         <div style="width:56px;font-weight:700;">${r.RoomNo}</div>
-        <div style="flex:1;font-size:12.5px;color:var(--ink-soft);">上次 ${r.LastMeterReading || 0} 度</div>
+        <div style="flex:1;font-size:12.5px;color:var(--ink-soft);">${r.TenantName || '空房'} · 上次 ${r.LastMeterReading || 0} 度</div>
         <input type="number" inputmode="decimal" enterkeyhint="next"
           class="batch-meter-input" data-room="${r.RoomNo}" data-index="${i}"
           placeholder="本次讀數" style="width:110px;padding:9px;border-radius:8px;border:1px solid var(--line);text-align:right;">
       </div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding-left:64px;">
-        <input type="checkbox" class="batch-rent-check" data-room="${r.RoomNo}" style="width:16px;height:16px;">
-        <label style="margin:0;font-size:12.5px;">順便收租</label>
-        <input type="number" min="1" value="1" class="batch-rent-months" data-room="${r.RoomNo}"
-          style="width:50px;padding:6px;border-radius:6px;border:1px solid var(--line);text-align:center;font-size:12.5px;display:none;">
+      <div style="margin-top:6px;padding-left:64px;">
+        <span class="badge neutral">${r.RentCycle || '未設定'}</span>
+        ${dueBadge}
       </div>
-    </div>`).join('');
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding-left:64px;">
+        <input type="checkbox" class="batch-rent-check" data-room="${r.RoomNo}" ${suggestCollect ? 'checked' : ''} style="width:16px;height:16px;">
+        <label style="margin:0;font-size:12.5px;">順便收租${suggestCollect ? '（系統建議）' : ''}</label>
+        <input type="number" min="1" value="${cycleDefault}" class="batch-rent-months" data-room="${r.RoomNo}"
+          style="width:50px;padding:6px;border-radius:6px;border:1px solid var(--line);text-align:center;font-size:12.5px;${suggestCollect ? '' : 'display:none;'}">
+      </div>
+    </div>`;
+  }).join('');
 
   // Enter / 下一步 直接跳到下一列的電表輸入框，比照電腦鍵盤 Enter 操作習慣
   el.querySelectorAll('.batch-meter-input').forEach((input, idx, all) => {
