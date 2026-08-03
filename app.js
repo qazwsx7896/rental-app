@@ -611,6 +611,19 @@ function fallbackCopy(text) {
   document.body.removeChild(ta);
 }
 
+function buildFallbackBillText(bill) {
+  const titleMap = { '電費': '電費帳單', '租金': '房租帳單', '合併': '電費+房租 帳單' };
+  const title = titleMap[bill.Type] || '帳單';
+  return '家人們 午安～\n' +
+    '【' + bill.RoomNo + ' 房】' + title + '\n\n' +
+    bill.DetailText + '\n' +
+    '－－－－－－－－\n' +
+    '合計應繳：' + fmtMoney(bill.Amount) + '\n\n' +
+    '麻煩於期限內完成繳費\n' +
+    '繳費後記得回傳明細供對帳哦\n' +
+    '若有問題再請不吝指教，3Q🙇‍♂️';
+}
+
 function renderMeterRecentBills() {
   const bills = (STATE.bills || [])
     .slice()
@@ -641,12 +654,23 @@ function renderMeterRecentBills() {
         </div>
         <div class="btn-row">
           ${b.Status === '待繳' ? `<button class="btn btn-outline btn-sm mark-paid" data-id="${b.BillID}">標記為已繳</button>` : ''}
+          <button class="btn btn-primary btn-sm copy-bill" data-id="${b.BillID}">📋 複製</button>
           <button class="btn btn-outline btn-sm edit-bill" data-id="${b.BillID}">編輯</button>
           <button class="btn btn-danger btn-sm delete-bill" data-id="${b.BillID}">刪除</button>
         </div>
       </div>`;
   }).join('');
 
+  el.querySelectorAll('.copy-bill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const bill = (STATE.bills || []).find(x => x.BillID === btn.dataset.id);
+      if (!bill) return;
+      const text = bill.BillText && bill.BillText.trim()
+        ? bill.BillText
+        : buildFallbackBillText(bill); // 舊資料若還沒有 BillText 欄位，用現有欄位組一份堪用的文字
+      copyBillText(text);
+    });
+  });
   el.querySelectorAll('.mark-paid').forEach(btn => {
     btn.addEventListener('click', async () => {
       const res = await apiPost('markBillPaid', { billId: btn.dataset.id });
