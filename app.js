@@ -699,7 +699,7 @@ async function runBatchMeterGenerate() {
     if (res.ok) {
       successCount++;
       const r = res.result;
-      batch.push({ billId: r.billId, roomNo, newReading, rentMonths, restoreFields });
+      batch.push({ billId: r.billId, roomNo, newReading, rentMonths, restoreFields, adHocRentBillId: r.adHocRentBillId || null });
       resultsEl.insertAdjacentHTML('beforeend', `
         <div class="bill-ticket">
           <div class="ticket-title">📋 ${roomNo} 房帳單已產生</div>
@@ -732,6 +732,10 @@ async function runBatchMeterGenerate() {
       undo: async () => {
         for (const b of batch.slice().reverse()) {
           await apiPost('undoBillAndRestoreRoom', { billId: b.billId, roomNo: b.roomNo, restoreFields: b.restoreFields });
+          // 如果這間房的租金帳單是這次順手臨時產生的，復原時要整筆刪除，不能只是解除合併變回待繳
+          if (b.adHocRentBillId) {
+            await apiPost('deleteBill', { billId: b.adHocRentBillId });
+          }
         }
       },
       redo: async () => {
@@ -802,7 +806,10 @@ async function calcAndGenerateBill() {
   const r = res.result;
   pushHistory({
     label: `${roomNo} 房抄表帳單`,
-    undo: () => apiPost('undoBillAndRestoreRoom', { billId: r.billId, roomNo, restoreFields }),
+    undo: async () => {
+      await apiPost('undoBillAndRestoreRoom', { billId: r.billId, roomNo, restoreFields });
+      if (r.adHocRentBillId) await apiPost('deleteBill', { billId: r.adHocRentBillId });
+    },
     redo: () => apiPost('recordMeterAndBill', { roomNo, newReading, rentMonths })
   });
 
