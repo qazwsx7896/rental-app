@@ -243,15 +243,27 @@ function openMonthlyRentOverviewModal() {
     if (checks.length === 0) { toast('沒有勾選任何房間'); return; }
     const statusEl = document.getElementById('rent-overview-status');
     let successCount = 0;
+    const undoStack = [];
     for (const check of checks) {
       const roomNo = check.dataset.room;
       const monthsInput = document.querySelector(`.rent-overview-months[data-room="${roomNo}"]`);
       const months = Number(monthsInput.value || 1);
       statusEl.textContent = `處理中… ${roomNo} 房`;
+
+      const prevRoom = (STATE.rooms || []).find(r => String(r.RoomNo) === String(roomNo));
+      const restoreFields = prevRoom ? { nextRentDueDate: prevRoom.NextRentDueDate || '' } : null;
+
       const res = await apiPost('generateRentBill', { roomNo, months });
-      if (res.ok) successCount++;
+      if (res.ok) {
+        successCount++;
+        undoStack.push({ billId: res.result.billId, roomNo, restoreFields, mergedFromBillId: null });
+      }
     }
-    statusEl.textContent = `完成！已產生 ${successCount} 筆租金帳單`;
+    statusEl.innerHTML = `完成！已產生 ${successCount} 筆租金帳單` +
+      (successCount > 0 ? ` <button class="btn btn-danger btn-sm" id="btn-undo-rent-batch" style="margin-left:8px;">↩️ 復原這批</button>` : '');
+    if (successCount > 0) {
+      document.getElementById('btn-undo-rent-batch').addEventListener('click', () => undoBatch(undoStack, 'btn-undo-rent-batch'));
+    }
     toast(`已產生 ${successCount} 筆租金帳單`);
     await refreshData();
     renderAll();
@@ -491,6 +503,26 @@ function renderBatchMeterTable() {
   });
 }
 
+async function undoBatch(undoStack, triggerBtnId) {
+  const btn = document.getElementById(triggerBtnId);
+  if (btn) { btn.disabled = true; btn.textContent = '復原中…'; }
+
+  for (const item of undoStack.slice().reverse()) {
+    await apiPost('undoBillAndRestoreRoom', item);
+  }
+
+  toast(`已復原 ${undoStack.length} 筆操作`);
+  await refreshData();
+  renderAll();
+  if (btn) btn.remove();
+  const resultsEl = document.getElementById('batch-meter-results');
+  if (resultsEl) resultsEl.innerHTML = '';
+  const meterResultEl = document.getElementById('meter-result');
+  if (meterResultEl) meterResultEl.innerHTML = '';
+  const rentStatusEl = document.getElementById('rent-overview-status');
+  if (rentStatusEl) rentStatusEl.textContent = '';
+}
+
 async function runBatchMeterGenerate() {
   const inputs = Array.from(document.querySelectorAll('.batch-meter-input')).filter(i => i.value !== '');
   if (inputs.length === 0) { toast('請至少輸入一間房間的電表數字'); return; }
@@ -498,6 +530,7 @@ async function runBatchMeterGenerate() {
   const resultsEl = document.getElementById('batch-meter-results');
   resultsEl.innerHTML = '';
   let successCount = 0;
+  const undoStack = [];
 
   for (const input of inputs) {
     const roomNo = input.dataset.room;
@@ -507,10 +540,19 @@ async function runBatchMeterGenerate() {
       ? Number(document.querySelector(`.batch-rent-months[data-room="${roomNo}"]`).value || 1)
       : 0;
 
+    // 先記住這間房操作前的狀態，萬一打錯了才能整批復原
+    const prevRoom = (STATE.rooms || []).find(r => String(r.RoomNo) === String(roomNo));
+    const restoreFields = prevRoom ? {
+      lastMeterReading: prevRoom.LastMeterReading || 0,
+      lastMeterDate: prevRoom.LastMeterDate || '',
+      nextRentDueDate: prevRoom.NextRentDueDate || ''
+    } : null;
+
     const res = await apiPost('recordMeterAndBill', { roomNo, newReading, rentMonths });
     if (res.ok) {
       successCount++;
       const r = res.result;
+      undoStack.push({ billId: r.billId, roomNo, restoreFields, mergedFromBillId: r.mergedFromBillId || null });
       resultsEl.insertAdjacentHTML('beforeend', `
         <div class="bill-ticket">
           <div class="ticket-title">📋 ${roomNo} 房帳單已產生</div>
@@ -524,6 +566,12 @@ async function runBatchMeterGenerate() {
           <div class="hint">${res.error}</div>
         </div>`);
     }
+  }
+
+  if (successCount > 0) {
+    resultsEl.insertAdjacentHTML('afterbegin', `
+      <button class="btn btn-danger" id="btn-undo-meter-batch" style="margin-bottom:10px;">↩️ 復原這次批次抄表（${successCount} 筆）</button>`);
+    document.getElementById('btn-undo-meter-batch').addEventListener('click', () => undoBatch(undoStack, 'btn-undo-meter-batch'));
   }
 
   resultsEl.querySelectorAll('.btn-copy-batch').forEach(btn => {
@@ -574,17 +622,29 @@ async function calcAndGenerateBill() {
   const includeRent = document.getElementById('meter-include-rent').checked;
   const rentMonths = includeRent ? Number(document.getElementById('meter-rent-months').value || 1) : 0;
 
+  const prevRoom = (STATE.rooms || []).find(r => String(r.RoomNo) === String(roomNo));
+  const restoreFields = prevRoom ? {
+    lastMeterReading: prevRoom.LastMeterReading || 0,
+    lastMeterDate: prevRoom.LastMeterDate || '',
+    nextRentDueDate: prevRoom.NextRentDueDate || ''
+  } : null;
+
   const res = await apiPost('recordMeterAndBill', { roomNo, newReading, rentMonths });
   if (!res.ok) { toast('失敗：' + res.error); return; }
 
   const r = res.result;
+  const undoItem = { billId: r.billId, roomNo, restoreFields, mergedFromBillId: r.mergedFromBillId || null };
   document.getElementById('meter-result').innerHTML = `
     <div class="bill-ticket">
       <div class="ticket-title">📋 帳單已產生（${roomNo} 房）</div>
       <pre id="bill-text-content">${r.billText}</pre>
-      <button class="btn btn-primary" id="btn-copy-bill" style="margin-top:12px;">📋 一鍵複製到 LINE</button>
+      <div class="btn-row" style="margin-top:12px;">
+        <button class="btn btn-primary" id="btn-copy-bill">📋 一鍵複製到 LINE</button>
+        <button class="btn btn-danger" id="btn-undo-single-bill">↩️ 復原</button>
+      </div>
     </div>`;
   document.getElementById('btn-copy-bill').addEventListener('click', () => copyBillText(r.billText));
+  document.getElementById('btn-undo-single-bill').addEventListener('click', () => undoBatch([undoItem], 'btn-undo-single-bill'));
 
   document.getElementById('meter-new').value = '';
   document.getElementById('meter-include-rent').checked = false;
