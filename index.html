@@ -50,12 +50,21 @@
 
   <!-- ================= 房客/合約 ================= -->
   <section id="screen-rooms" class="screen">
+    <button class="btn btn-outline" id="btn-monthly-rent-overview" style="margin-bottom:12px;">📋 本月租金總覽（批次產生）</button>
     <div id="rooms-list"></div>
   </section>
 
   <!-- ================= 抄表/帳單 ================= -->
   <section id="screen-meter" class="screen">
-    <div class="section-title">選擇房間</div>
+    <div class="section-title">⚡ 批次抄表（一次輸入全部房間）</div>
+    <div class="card">
+      <div class="hint" style="margin-bottom:10px;">依序輸入本次電表數字，按 Enter 或鍵盤「下一個」可跳到下一間房間，沒有要抄的房間留空即可</div>
+      <div id="batch-meter-table"></div>
+      <button class="btn btn-primary" id="btn-batch-generate" style="margin-top:12px;">產生所有帳單</button>
+    </div>
+    <div id="batch-meter-results"></div>
+
+    <div class="section-title">單一房間抄表（含租金合併預覽）</div>
     <div class="card">
       <div class="field">
         <label>房號</label>
@@ -87,6 +96,7 @@
     <div class="section-title">近期帳單紀錄</div>
     <div id="meter-recent-bills"></div>
   </section>
+
 
   <!-- ================= 收款 ================= -->
   <section id="screen-payments" class="screen">
