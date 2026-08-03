@@ -106,6 +106,23 @@ header.topbar {
 header.topbar h1 { font-size: 17px; margin: 0; font-weight: 700; }
 header.topbar .subtitle { font-size: 12px; opacity: 0.85; margin-top: 2px; }
 
+.history-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: none;
+  background: rgba(255,255,255,0.18);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+}
+.history-btn:disabled {
+  opacity: 0.35;
+}
+.history-btn:not(:disabled):active {
+  background: rgba(255,255,255,0.32);
+}
+
 /* ---------- 分頁內容 ---------- */
 .screen { display: none; padding: 14px 14px 20px; }
 .screen.active { display: block; }
