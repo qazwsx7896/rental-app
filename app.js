@@ -668,12 +668,16 @@ function renderBatchMeterTable() {
 }
 
 async function runBatchMeterGenerate() {
-  const inputs = Array.from(document.querySelectorAll('.batch-meter-input')).filter(i => i.value !== '');
+  const allRoomInputs = Array.from(document.querySelectorAll('.batch-meter-input'));
+  const inputs = allRoomInputs.filter(i => i.value !== '');
   if (inputs.length === 0) { toast('請至少輸入一間房間的電表數字'); return; }
+
+  const skippedRooms = allRoomInputs.filter(i => i.value === '').map(i => i.dataset.room);
 
   const resultsEl = document.getElementById('batch-meter-results');
   resultsEl.innerHTML = '';
   let successCount = 0;
+  const failedRooms = [];
   const batch = [];
 
   for (const input of inputs) {
@@ -703,6 +707,7 @@ async function runBatchMeterGenerate() {
           <button class="btn btn-primary btn-copy-batch" data-text="${encodeURIComponent(r.billText)}" style="margin-top:12px;">📋 一鍵複製到 LINE</button>
         </div>`);
     } else {
+      failedRooms.push(roomNo);
       resultsEl.insertAdjacentHTML('beforeend', `
         <div class="card" style="border-color:var(--danger);">
           <div style="font-weight:700;color:var(--danger);">${roomNo} 房失敗</div>
@@ -710,6 +715,16 @@ async function runBatchMeterGenerate() {
         </div>`);
     }
   }
+
+  // 清楚列出這次總共有幾間房、跳過幾間（沒輸入）、成功幾筆、失敗幾筆，避免「沒跑出來」卻不知道原因
+  const summaryHtml = `
+    <div class="card" style="border-color:var(--primary);">
+      <div style="font-weight:700;margin-bottom:4px;">本次批次結果</div>
+      <div class="hint">總房間數：${allRoomInputs.length}　｜　本次有輸入：${inputs.length}　｜　成功：${successCount}　｜　失敗：${failedRooms.length}</div>
+      ${skippedRooms.length > 0 ? `<div class="hint" style="color:var(--warn);margin-top:4px;">本次未輸入、已略過：${skippedRooms.join('、')}</div>` : ''}
+      ${failedRooms.length > 0 ? `<div class="hint" style="color:var(--danger);margin-top:4px;">失敗房間：${failedRooms.join('、')}（詳細原因見下方紅框）</div>` : ''}
+    </div>`;
+  resultsEl.insertAdjacentHTML('afterbegin', summaryHtml);
 
   if (successCount > 0) {
     pushHistory({
@@ -838,20 +853,31 @@ function buildFallbackBillText(bill) {
 }
 
 function renderMeterRecentBills() {
-  const bills = (STATE.bills || [])
-    .slice()
-    .sort((a, b) => new Date(b.CreatedAt) - new Date(a.CreatedAt))
-    .slice(0, 15);
+  const showMerged = document.getElementById('meter-show-merged') &&
+    document.getElementById('meter-show-merged').checked;
+  const allBills = (STATE.bills || []).slice().sort((a, b) => new Date(b.CreatedAt) - new Date(a.CreatedAt));
+  const mergedCount = allBills.filter(b => String(b.Status).indexOf('已合併') === 0).length;
+  const bills = (showMerged ? allBills : allBills.filter(b => String(b.Status).indexOf('已合併') !== 0)).slice(0, 15);
+
   const el = document.getElementById('meter-recent-bills');
+  const toggleHtml = mergedCount > 0 ? `
+    <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-soft);margin-bottom:8px;cursor:pointer;">
+      <input type="checkbox" id="meter-show-merged" ${showMerged ? 'checked' : ''} style="width:14px;height:14px;">
+      顯示已合併的舊帳單紀錄（共 ${mergedCount} 筆，正常情況下不需要處理）
+    </label>` : '';
+
   if (bills.length === 0) {
-    el.innerHTML = `<div class="empty-state"><div class="icon">⚡</div><div class="msg">尚無帳單紀錄</div></div>`;
+    el.innerHTML = toggleHtml + `<div class="empty-state"><div class="icon">⚡</div><div class="msg">尚無帳單紀錄</div></div>`;
+    if (document.getElementById('meter-show-merged')) {
+      document.getElementById('meter-show-merged').addEventListener('change', renderMeterRecentBills);
+    }
     return;
   }
-  el.innerHTML = bills.map(b => {
+  el.innerHTML = toggleHtml + bills.map(b => {
     const statusBadge = b.Status === '待繳'
       ? '<span class="badge warn">待繳</span>'
       : (String(b.Status).indexOf('已合併') === 0
-        ? '<span class="badge neutral">已合併</span>'
+        ? '<span class="badge neutral">已合併（歷史紀錄，不用處理）</span>'
         : '<span class="badge success">已繳</span>');
     return `
       <div class="card">
@@ -873,6 +899,9 @@ function renderMeterRecentBills() {
         </div>
       </div>`;
   }).join('');
+  if (document.getElementById('meter-show-merged')) {
+    document.getElementById('meter-show-merged').addEventListener('change', renderMeterRecentBills);
+  }
 
   el.querySelectorAll('.copy-bill').forEach(btn => {
     btn.addEventListener('click', () => {
