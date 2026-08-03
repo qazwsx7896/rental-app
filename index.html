@@ -72,6 +72,15 @@
         </div>
       </div>
       <div class="hint" id="meter-price-hint"></div>
+      <div class="field" style="margin-top:12px;display:flex;align-items:center;gap:8px;">
+        <input type="checkbox" id="meter-include-rent" style="width:18px;height:18px;">
+        <label for="meter-include-rent" style="margin:0;">這次順便收租金</label>
+      </div>
+      <div class="field" id="meter-rent-months-wrap" style="display:none;">
+        <label>這次收幾個月房租</label>
+        <input id="meter-rent-months" type="number" min="1" value="1">
+        <div class="hint" id="meter-rent-preview"></div>
+      </div>
       <button class="btn btn-primary" id="btn-calc-bill" style="margin-top:10px;">計算並產生帳單</button>
     </div>
     <div id="meter-result"></div>
