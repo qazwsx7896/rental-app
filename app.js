@@ -212,17 +212,20 @@ function openMonthlyRentOverviewModal() {
     return;
   }
   openModal('本月租金總覽', `
-    <div class="hint" style="margin-bottom:10px;">預設全部勾選，不需要這次收租的房間，取消勾選就好；月數可依實際情況調整</div>
+    <div class="hint" style="margin-bottom:10px;">預設全部勾選，不需要這次收租的房間，取消勾選就好；月數可依實際情況調整（合約 30 天內到期的房間會預設不勾，視為即將退租）</div>
     <div id="rent-overview-list">
       ${rooms.map(r => {
         const cycleDefault = r.RentCycle === '雙月繳' ? 2 : (r.RentCycle === '季繳' ? 3 : 1);
+        const contractDays = daysUntil(r.ContractEnd);
+        const isExpiringSoon = contractDays !== null && contractDays < 30;
         return `
-        <label class="card" style="display:block;cursor:pointer;">
+        <label class="card" style="display:block;cursor:pointer;${isExpiringSoon ? 'border-color:var(--danger);' : ''}">
           <div style="display:flex;align-items:center;gap:10px;">
-            <input type="checkbox" class="rent-overview-check" data-room="${r.RoomNo}" checked style="width:18px;height:18px;flex-shrink:0;">
+            <input type="checkbox" class="rent-overview-check" data-room="${r.RoomNo}" ${isExpiringSoon ? '' : 'checked'} style="width:18px;height:18px;flex-shrink:0;">
             <div style="flex:1;">
               <div style="font-weight:700;">${r.RoomNo} 房 · ${r.TenantName || '空房'}</div>
               <div class="hint">每月 $${r.RentAmount || 0}（${r.RentCycle || ''}）· 已繳至 ${r.NextRentDueDate || '未設定'}</div>
+              ${isExpiringSoon ? `<div class="hint" style="color:var(--danger);">⚠️ 合約 ${r.ContractEnd} 到期，即將退租</div>` : ''}
             </div>
             <div style="width:70px;">
               <input type="number" min="1" value="${cycleDefault}" class="rent-overview-months" data-room="${r.RoomNo}"
@@ -450,8 +453,13 @@ function renderBatchMeterTable() {
     const cycleDefault = r.RentCycle === '雙月繳' ? 2 : (r.RentCycle === '季繳' ? 3 : 1);
     const paidThrough = r.NextRentDueDate || '未設定';
     const days = daysUntil(r.NextRentDueDate);
-    // 系統建議：已繳至日期在 30 天內到期或已過期，就預先勾選提醒這次順便收租（僅為建議，可自行調整）
-    const suggestCollect = days !== null && days <= 30;
+    const contractDays = daysUntil(r.ContractEnd);
+    const isExpiringSoon = contractDays !== null && contractDays < 30;
+
+    // 系統建議：已繳至日期在 30 天內到期或已過期，就預先勾選提醒這次順便收租；
+    // 但如果合約快到期（房客即將退租），就不建議收租，退租電費另外於當天結算
+    const suggestCollect = !isExpiringSoon && days !== null && days <= 30;
+
     let dueBadge;
     if (days === null) {
       dueBadge = `<span class="badge neutral">未設定已繳至</span>`;
@@ -462,6 +470,11 @@ function renderBatchMeterTable() {
     } else {
       dueBadge = `<span class="badge success">已繳至 ${paidThrough}（還有 ${days} 天）</span>`;
     }
+
+    const moveOutNote = isExpiringSoon
+      ? `<div class="hint" style="color:var(--danger);margin-top:4px;">⚠️ 合約 ${r.ContractEnd} 到期，即將退租，不建議收租，電費請於退租當天結算</div>`
+      : '';
+
     return `
     <div class="card" style="padding:10px 12px;">
       <div style="display:flex;align-items:center;gap:8px;">
@@ -475,6 +488,7 @@ function renderBatchMeterTable() {
         <span class="badge neutral">${r.RentCycle || '未設定'}</span>
         ${dueBadge}
       </div>
+      ${moveOutNote}
       <div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding-left:64px;">
         <input type="checkbox" class="batch-rent-check" data-room="${r.RoomNo}" ${suggestCollect ? 'checked' : ''} style="width:16px;height:16px;">
         <label style="margin:0;font-size:12.5px;">順便收租${suggestCollect ? '（系統建議）' : ''}</label>
