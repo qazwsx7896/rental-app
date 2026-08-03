@@ -7,6 +7,82 @@ const LOCK_PASSWORD = '76751688';
 
 let STATE = { rooms: [], bills: [], payments: [], expenses: [], settings: {} };
 
+/* ---------------- 全域上一步／下一步（復原／重做）系統 ---------------- */
+const HISTORY_LIMIT = 30;
+let historyUndoStack = [];
+let historyRedoStack = [];
+
+/**
+ * 每個會修改資料的動作完成後，呼叫這個函式登記一筆歷史紀錄：
+ * label：顯示用的簡短說明
+ * undo：復原這個動作要做的事（async function）
+ * redo：重新套用這個動作要做的事（async function）
+ */
+function pushHistory(entry) {
+  historyUndoStack.push(entry);
+  if (historyUndoStack.length > HISTORY_LIMIT) historyUndoStack.shift();
+  historyRedoStack = []; // 有新動作發生，重做的紀錄就失效了（跟瀏覽器上一頁/下一頁邏輯一樣）
+  updateHistoryButtons();
+}
+
+async function historyUndo() {
+  if (historyUndoStack.length === 0) return;
+  const entry = historyUndoStack.pop();
+  updateHistoryButtons();
+  try {
+    await entry.undo();
+    historyRedoStack.push(entry);
+    toast('↩️ 已復原：' + entry.label);
+  } catch (err) {
+    toast('復原失敗：' + err.message);
+  }
+  await refreshData();
+  renderAll();
+  updateHistoryButtons();
+}
+
+async function historyRedo() {
+  if (historyRedoStack.length === 0) return;
+  const entry = historyRedoStack.pop();
+  updateHistoryButtons();
+  try {
+    await entry.redo();
+    historyUndoStack.push(entry);
+    toast('↪️ 已重做：' + entry.label);
+  } catch (err) {
+    toast('重做失敗：' + err.message);
+  }
+  await refreshData();
+  renderAll();
+  updateHistoryButtons();
+}
+
+function updateHistoryButtons() {
+  const undoBtn = document.getElementById('global-undo-btn');
+  const redoBtn = document.getElementById('global-redo-btn');
+  if (undoBtn) undoBtn.disabled = historyUndoStack.length === 0;
+  if (redoBtn) redoBtn.disabled = historyRedoStack.length === 0;
+}
+
+/**
+ * 防止重複點擊：按鈕點下去之後立刻鎖住，直到這個非同步動作完成才解鎖，
+ * 避免因為網路慢、使用者手滑連點，導致同一個操作被送出兩次（例如帳單重複產生）。
+ */
+async function runLocked(button, asyncFn) {
+  if (!button || button.dataset.busy === '1') return;
+  button.dataset.busy = '1';
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = '處理中…';
+  try {
+    await asyncFn();
+  } finally {
+    button.dataset.busy = '';
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
 /* ---------------- 鎖定畫面 ---------------- */
 (function initLock() {
   const unlocked = sessionStorage.getItem('unlocked') === '1';
@@ -83,6 +159,8 @@ async function boot() {
   initMeterTab();
   initPaymentsTab();
   initReportsTab();
+  document.getElementById('global-undo-btn').addEventListener('click', historyUndo);
+  document.getElementById('global-redo-btn').addEventListener('click', historyRedo);
   renderAll();
 }
 
@@ -241,36 +319,37 @@ function openMonthlyRentOverviewModal() {
     <div id="rent-overview-status" class="hint" style="margin-top:8px;"></div>
   `);
 
-  document.getElementById('btn-confirm-rent-overview').addEventListener('click', async () => {
+  const confirmBtn = document.getElementById('btn-confirm-rent-overview');
+  confirmBtn.addEventListener('click', () => runLocked(confirmBtn, async () => {
     const checks = Array.from(document.querySelectorAll('.rent-overview-check')).filter(c => c.checked);
     if (checks.length === 0) { toast('沒有勾選任何房間'); return; }
     const statusEl = document.getElementById('rent-overview-status');
     let successCount = 0;
-    const undoStack = [];
+    const batch = [];
     for (const check of checks) {
       const roomNo = check.dataset.room;
       const monthsInput = document.querySelector(`.rent-overview-months[data-room="${roomNo}"]`);
       const months = Number(monthsInput.value || 1);
       statusEl.textContent = `處理中… ${roomNo} 房`;
 
-      const prevRoom = (STATE.rooms || []).find(r => String(r.RoomNo) === String(roomNo));
-      const restoreFields = prevRoom ? { nextRentDueDate: prevRoom.NextRentDueDate || '' } : null;
-
       const res = await apiPost('generateRentBill', { roomNo, months });
       if (res.ok) {
         successCount++;
-        undoStack.push({ billId: res.result.billId, roomNo, restoreFields, mergedFromBillId: null });
+        batch.push({ billId: res.result.billId, roomNo, months });
       }
     }
-    statusEl.innerHTML = `完成！已產生 ${successCount} 筆租金帳單` +
-      (successCount > 0 ? ` <button class="btn btn-danger btn-sm" id="btn-undo-rent-batch" style="margin-left:8px;">↩️ 復原這批</button>` : '');
+    statusEl.textContent = `完成！已產生 ${successCount} 筆租金帳單`;
     if (successCount > 0) {
-      document.getElementById('btn-undo-rent-batch').addEventListener('click', () => undoBatch(undoStack, 'btn-undo-rent-batch'));
+      pushHistory({
+        label: `批次產生 ${successCount} 筆租金帳單`,
+        undo: async () => { for (const b of batch) await apiPost('deleteBill', { billId: b.billId }); },
+        redo: async () => { for (const b of batch) await apiPost('generateRentBill', { roomNo: b.roomNo, months: b.months }); }
+      });
     }
     toast(`已產生 ${successCount} 筆租金帳單`);
     await refreshData();
     renderAll();
-  });
+  }));
 }
 
 function renderRooms() {
@@ -341,12 +420,24 @@ function openGenerateRentBillModal(room) {
   document.getElementById('rb-months').addEventListener('input', updatePreview);
   updatePreview();
 
-  document.getElementById('btn-confirm-rentbill').addEventListener('click', async () => {
+  const confirmBtn = document.getElementById('btn-confirm-rentbill');
+  confirmBtn.addEventListener('click', () => runLocked(confirmBtn, async () => {
     const months = Number(document.getElementById('rb-months').value || 1);
     const res = await apiPost('generateRentBill', { roomNo: room.RoomNo, months });
-    if (res.ok) { toast('已產生租金待繳帳單'); closeModal(); await refreshData(); renderAll(); }
-    else toast('失敗：' + res.error);
-  });
+    if (res.ok) {
+      pushHistory({
+        label: `${room.RoomNo} 房產生租金帳單`,
+        undo: () => apiPost('deleteBill', { billId: res.result.billId }),
+        redo: () => apiPost('generateRentBill', { roomNo: room.RoomNo, months })
+      });
+      toast('已產生租金待繳帳單');
+      closeModal();
+      await refreshData();
+      renderAll();
+    } else {
+      toast('失敗：' + res.error);
+    }
+  }));
 }
 
 function openRoomForm(room) {
@@ -391,7 +482,8 @@ function openRoomForm(room) {
     </div>
   `);
 
-  document.getElementById('btn-save-room').addEventListener('click', async () => {
+  const saveBtn = document.getElementById('btn-save-room');
+  saveBtn.addEventListener('click', () => runLocked(saveBtn, async () => {
     const data = {
       roomNo: document.getElementById('f-roomNo').value.trim(),
       tenantName: document.getElementById('f-tenantName').value.trim(),
@@ -406,19 +498,73 @@ function openRoomForm(room) {
       note: document.getElementById('f-note').value.trim()
     };
     if (!data.roomNo) { toast('請輸入房號'); return; }
-    const res = isEdit ? await apiPost('updateRoom', data) : await apiPost('addRoom', data);
-    if (res.ok) { toast('已儲存'); closeModal(); await refreshData(); renderAll(); }
-    else toast('失敗：' + res.error);
-  });
+
+    if (isEdit) {
+      const prevPayload = roomToUpdatePayload(room);
+      const res = await apiPost('updateRoom', data);
+      if (res.ok) {
+        pushHistory({
+          label: `編輯房間 ${data.roomNo}`,
+          undo: () => apiPost('updateRoom', prevPayload),
+          redo: () => apiPost('updateRoom', data)
+        });
+        toast('已儲存'); closeModal(); await refreshData(); renderAll();
+      } else {
+        toast('失敗：' + res.error);
+      }
+    } else {
+      const res = await apiPost('addRoom', data);
+      if (res.ok) {
+        pushHistory({
+          label: `新增房間 ${data.roomNo}`,
+          undo: () => apiPost('deleteRoom', { roomNo: data.roomNo }),
+          redo: () => apiPost('addRoom', data)
+        });
+        toast('已儲存'); closeModal(); await refreshData(); renderAll();
+      } else {
+        toast('失敗：' + res.error);
+      }
+    }
+  }));
 
   if (isEdit) {
-    document.getElementById('btn-del-room').addEventListener('click', async () => {
+    const delBtn = document.getElementById('btn-del-room');
+    delBtn.addEventListener('click', () => runLocked(delBtn, async () => {
       if (!confirm(`確定要刪除 ${r.RoomNo} 房嗎？`)) return;
       const res = await apiPost('deleteRoom', { roomNo: r.RoomNo });
-      if (res.ok) { toast('已刪除'); closeModal(); await refreshData(); renderAll(); }
-      else toast('失敗：' + res.error);
-    });
+      if (res.ok) {
+        pushHistory({
+          label: `刪除房間 ${r.RoomNo}`,
+          undo: () => apiPost('restoreRoom', r),
+          redo: () => apiPost('deleteRoom', { roomNo: r.RoomNo })
+        });
+        toast('已刪除'); closeModal(); await refreshData(); renderAll();
+      } else {
+        toast('失敗：' + res.error);
+      }
+    }));
   }
+}
+
+/**
+ * 把從 STATE 讀到的房間物件（欄位名稱跟試算表欄位一致，例如 RoomNo、TenantName）
+ * 轉換成 updateRoom 動作需要的欄位名稱（roomNo、tenantName…），供復原編輯用
+ */
+function roomToUpdatePayload(r) {
+  return {
+    roomNo: r.RoomNo,
+    tenantName: r.TenantName,
+    phone: r.Phone,
+    deposit: r.Deposit,
+    contractStart: r.ContractStart ? String(r.ContractStart).slice(0, 10) : '',
+    contractEnd: r.ContractEnd ? String(r.ContractEnd).slice(0, 10) : '',
+    rentCycle: r.RentCycle,
+    rentAmount: r.RentAmount,
+    lastMeterReading: r.LastMeterReading,
+    lastMeterDate: r.LastMeterDate ? String(r.LastMeterDate).slice(0, 10) : '',
+    nextRentDueDate: r.NextRentDueDate ? String(r.NextRentDueDate).slice(0, 10) : '',
+    note: r.Note
+  };
 }
 
 /* ============================================================
@@ -429,7 +575,9 @@ function initMeterTab() {
     updateMeterLastReading();
     updateRentPreview();
   });
-  document.getElementById('btn-calc-bill').addEventListener('click', calcAndGenerateBill);
+  document.getElementById('btn-calc-bill').addEventListener('click', function () {
+    runLocked(this, calcAndGenerateBill);
+  });
 
   const includeRentBox = document.getElementById('meter-include-rent');
   const monthsWrap = document.getElementById('meter-rent-months-wrap');
@@ -439,7 +587,9 @@ function initMeterTab() {
   });
   document.getElementById('meter-rent-months').addEventListener('input', updateRentPreview);
 
-  document.getElementById('btn-batch-generate').addEventListener('click', runBatchMeterGenerate);
+  document.getElementById('btn-batch-generate').addEventListener('click', function () {
+    runLocked(this, runBatchMeterGenerate);
+  });
 }
 
 function renderBatchMeterTable() {
@@ -517,26 +667,6 @@ function renderBatchMeterTable() {
   });
 }
 
-async function undoBatch(undoStack, triggerBtnId) {
-  const btn = document.getElementById(triggerBtnId);
-  if (btn) { btn.disabled = true; btn.textContent = '復原中…'; }
-
-  for (const item of undoStack.slice().reverse()) {
-    await apiPost('undoBillAndRestoreRoom', item);
-  }
-
-  toast(`已復原 ${undoStack.length} 筆操作`);
-  await refreshData();
-  renderAll();
-  if (btn) btn.remove();
-  const resultsEl = document.getElementById('batch-meter-results');
-  if (resultsEl) resultsEl.innerHTML = '';
-  const meterResultEl = document.getElementById('meter-result');
-  if (meterResultEl) meterResultEl.innerHTML = '';
-  const rentStatusEl = document.getElementById('rent-overview-status');
-  if (rentStatusEl) rentStatusEl.textContent = '';
-}
-
 async function runBatchMeterGenerate() {
   const inputs = Array.from(document.querySelectorAll('.batch-meter-input')).filter(i => i.value !== '');
   if (inputs.length === 0) { toast('請至少輸入一間房間的電表數字'); return; }
@@ -544,7 +674,7 @@ async function runBatchMeterGenerate() {
   const resultsEl = document.getElementById('batch-meter-results');
   resultsEl.innerHTML = '';
   let successCount = 0;
-  const undoStack = [];
+  const batch = [];
 
   for (const input of inputs) {
     const roomNo = input.dataset.room;
@@ -554,19 +684,18 @@ async function runBatchMeterGenerate() {
       ? Number(document.querySelector(`.batch-rent-months[data-room="${roomNo}"]`).value || 1)
       : 0;
 
-    // 先記住這間房操作前的狀態，萬一打錯了才能整批復原
+    // 先記住這間房操作前的電表狀態，復原時才能精準退回去（已繳至日期現在只在標記已繳時才會變動，這裡不用管）
     const prevRoom = (STATE.rooms || []).find(r => String(r.RoomNo) === String(roomNo));
     const restoreFields = prevRoom ? {
       lastMeterReading: prevRoom.LastMeterReading || 0,
-      lastMeterDate: prevRoom.LastMeterDate || '',
-      nextRentDueDate: prevRoom.NextRentDueDate || ''
+      lastMeterDate: prevRoom.LastMeterDate || ''
     } : null;
 
     const res = await apiPost('recordMeterAndBill', { roomNo, newReading, rentMonths });
     if (res.ok) {
       successCount++;
       const r = res.result;
-      undoStack.push({ billId: r.billId, roomNo, restoreFields, mergedFromBillId: r.mergedFromBillId || null });
+      batch.push({ billId: r.billId, roomNo, newReading, rentMonths, restoreFields });
       resultsEl.insertAdjacentHTML('beforeend', `
         <div class="bill-ticket">
           <div class="ticket-title">📋 ${roomNo} 房帳單已產生</div>
@@ -583,9 +712,19 @@ async function runBatchMeterGenerate() {
   }
 
   if (successCount > 0) {
-    resultsEl.insertAdjacentHTML('afterbegin', `
-      <button class="btn btn-danger" id="btn-undo-meter-batch" style="margin-bottom:10px;">↩️ 復原這次批次抄表（${successCount} 筆）</button>`);
-    document.getElementById('btn-undo-meter-batch').addEventListener('click', () => undoBatch(undoStack, 'btn-undo-meter-batch'));
+    pushHistory({
+      label: `批次抄表 ${successCount} 筆`,
+      undo: async () => {
+        for (const b of batch.slice().reverse()) {
+          await apiPost('undoBillAndRestoreRoom', { billId: b.billId, roomNo: b.roomNo, restoreFields: b.restoreFields });
+        }
+      },
+      redo: async () => {
+        for (const b of batch) {
+          await apiPost('recordMeterAndBill', { roomNo: b.roomNo, newReading: b.newReading, rentMonths: b.rentMonths });
+        }
+      }
+    });
   }
 
   resultsEl.querySelectorAll('.btn-copy-batch').forEach(btn => {
@@ -639,26 +778,26 @@ async function calcAndGenerateBill() {
   const prevRoom = (STATE.rooms || []).find(r => String(r.RoomNo) === String(roomNo));
   const restoreFields = prevRoom ? {
     lastMeterReading: prevRoom.LastMeterReading || 0,
-    lastMeterDate: prevRoom.LastMeterDate || '',
-    nextRentDueDate: prevRoom.NextRentDueDate || ''
+    lastMeterDate: prevRoom.LastMeterDate || ''
   } : null;
 
   const res = await apiPost('recordMeterAndBill', { roomNo, newReading, rentMonths });
   if (!res.ok) { toast('失敗：' + res.error); return; }
 
   const r = res.result;
-  const undoItem = { billId: r.billId, roomNo, restoreFields, mergedFromBillId: r.mergedFromBillId || null };
+  pushHistory({
+    label: `${roomNo} 房抄表帳單`,
+    undo: () => apiPost('undoBillAndRestoreRoom', { billId: r.billId, roomNo, restoreFields }),
+    redo: () => apiPost('recordMeterAndBill', { roomNo, newReading, rentMonths })
+  });
+
   document.getElementById('meter-result').innerHTML = `
     <div class="bill-ticket">
       <div class="ticket-title">📋 帳單已產生（${roomNo} 房）</div>
       <pre id="bill-text-content">${r.billText}</pre>
-      <div class="btn-row" style="margin-top:12px;">
-        <button class="btn btn-primary" id="btn-copy-bill">📋 一鍵複製到 LINE</button>
-        <button class="btn btn-danger" id="btn-undo-single-bill">↩️ 復原</button>
-      </div>
+      <button class="btn btn-primary" id="btn-copy-bill" style="margin-top:12px;">📋 一鍵複製到 LINE</button>
     </div>`;
   document.getElementById('btn-copy-bill').addEventListener('click', () => copyBillText(r.billText));
-  document.getElementById('btn-undo-single-bill').addEventListener('click', () => undoBatch([undoItem], 'btn-undo-single-bill'));
 
   document.getElementById('meter-new').value = '';
   document.getElementById('meter-include-rent').checked = false;
@@ -746,22 +885,41 @@ function renderMeterRecentBills() {
     });
   });
   el.querySelectorAll('.mark-paid').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const res = await apiPost('markBillPaid', { billId: btn.dataset.id });
-      if (res.ok) { toast('已標記為已繳'); await refreshData(); renderAll(); }
-      else toast('失敗：' + res.error);
-    });
+    btn.addEventListener('click', () => runLocked(btn, async () => {
+      const billId = btn.dataset.id;
+      const res = await apiPost('markBillPaid', { billId });
+      if (res.ok) {
+        pushHistory({
+          label: `標記帳單已繳`,
+          undo: () => apiPost('unmarkBillPaid', { billId }),
+          redo: () => apiPost('markBillPaid', { billId })
+        });
+        toast('已標記為已繳'); await refreshData(); renderAll();
+      } else {
+        toast('失敗：' + res.error);
+      }
+    }));
   });
   el.querySelectorAll('.edit-bill').forEach(btn => {
     btn.addEventListener('click', () => openBillEditModal(btn.dataset.id));
   });
   el.querySelectorAll('.delete-bill').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      if (!confirm('確定要刪除這筆帳單嗎？此動作無法復原。')) return;
-      const res = await apiPost('deleteBill', { billId: btn.dataset.id });
-      if (res.ok) { toast('已刪除帳單'); await refreshData(); renderAll(); }
-      else toast('失敗：' + res.error);
-    });
+    btn.addEventListener('click', () => runLocked(btn, async () => {
+      if (!confirm('確定要刪除這筆帳單嗎？')) return;
+      const billId = btn.dataset.id;
+      const billSnapshot = (STATE.bills || []).find(x => x.BillID === billId);
+      const res = await apiPost('deleteBill', { billId });
+      if (res.ok) {
+        pushHistory({
+          label: `刪除帳單（${billSnapshot ? billSnapshot.RoomNo : ''} 房）`,
+          undo: () => apiPost('restoreBill', billSnapshot),
+          redo: () => apiPost('deleteBill', { billId })
+        });
+        toast('已刪除帳單'); await refreshData(); renderAll();
+      } else {
+        toast('失敗：' + res.error);
+      }
+    }));
   });
 }
 
@@ -776,7 +934,9 @@ function openBillEditModal(billId) {
       <button class="btn btn-primary" id="btn-save-bill">儲存</button>
     </div>
   `);
-  document.getElementById('btn-save-bill').addEventListener('click', async () => {
+  const saveBtn = document.getElementById('btn-save-bill');
+  saveBtn.addEventListener('click', () => runLocked(saveBtn, async () => {
+    const prevPayload = { billId, periodLabel: bill.PeriodLabel, detailText: bill.DetailText, amount: bill.Amount };
     const data = {
       billId: billId,
       periodLabel: document.getElementById('eb-period').value.trim(),
@@ -784,9 +944,17 @@ function openBillEditModal(billId) {
       amount: Number(document.getElementById('eb-amount').value || 0)
     };
     const res = await apiPost('updateBill', data);
-    if (res.ok) { toast('已儲存'); closeModal(); await refreshData(); renderAll(); }
-    else toast('失敗：' + res.error);
-  });
+    if (res.ok) {
+      pushHistory({
+        label: `編輯帳單（${bill.RoomNo} 房）`,
+        undo: () => apiPost('updateBill', prevPayload),
+        redo: () => apiPost('updateBill', data)
+      });
+      toast('已儲存'); closeModal(); await refreshData(); renderAll();
+    } else {
+      toast('失敗：' + res.error);
+    }
+  }));
 }
 
 /* ============================================================
@@ -798,12 +966,19 @@ function initPaymentsTab() {
   now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
   timeInput.value = now.toISOString().slice(0, 16);
 
-  document.getElementById('btn-add-manual-payment').addEventListener('click', async () => {
+  const addPaymentBtn = document.getElementById('btn-add-manual-payment');
+  addPaymentBtn.addEventListener('click', () => runLocked(addPaymentBtn, async () => {
     const amount = Number(document.getElementById('manual-payment-amount').value || 0);
     const receivedTime = document.getElementById('manual-payment-time').value;
     if (!amount) { toast('請輸入金額'); return; }
     const res = await apiPost('addManualPayment', { amount, receivedTime });
     if (res.ok) {
+      const paymentId = res.result.paymentId;
+      pushHistory({
+        label: `新增收款 ${fmtMoney(amount)}`,
+        undo: () => apiPost('deletePayment', { paymentId }),
+        redo: () => apiPost('addManualPayment', { amount, receivedTime })
+      });
       toast('已新增收款');
       document.getElementById('manual-payment-amount').value = '';
       await refreshData();
@@ -811,25 +986,33 @@ function initPaymentsTab() {
     } else {
       toast('失敗：' + res.error);
     }
-  });
+  }));
 
   const input = document.getElementById('payment-photo-input');
   const statusEl = document.getElementById('payment-photo-status');
-  document.getElementById('btn-upload-payment-photo').addEventListener('click', () => input.click());
+  const uploadBtn = document.getElementById('btn-upload-payment-photo');
+  uploadBtn.addEventListener('click', () => input.click());
 
-  input.addEventListener('change', async () => {
+  input.addEventListener('change', () => runLocked(uploadBtn, async () => {
     const file = input.files[0];
     if (!file) return;
     statusEl.textContent = '辨識中，請稍候…（可能需要 5-15 秒）';
 
     try {
       const base64 = await fileToBase64_(file);
-      const res = await apiPost('ocrImportImage', { imageBase64: base64, mimeType: file.type || 'image/png' });
+      const mimeType = file.type || 'image/png';
+      const res = await apiPost('ocrImportImage', { imageBase64: base64, mimeType });
       if (!res.ok) {
         statusEl.textContent = '失敗：' + res.error;
         toast('辨識失敗：' + res.error);
       } else if (res.result.imported > 0) {
+        const items = res.result.items || [];
         statusEl.textContent = `成功匯入 ${res.result.imported} 筆收款！`;
+        pushHistory({
+          label: `照片辨識匯入 ${res.result.imported} 筆收款`,
+          undo: async () => { for (const it of items) await apiPost('deletePayment', { paymentId: it.paymentId }); },
+          redo: () => apiPost('ocrImportImage', { imageBase64: base64, mimeType })
+        });
         toast(`已匯入 ${res.result.imported} 筆收款`);
         await refreshData();
         renderAll();
@@ -842,7 +1025,7 @@ function initPaymentsTab() {
       toast('上傳失敗，請再試一次');
     }
     input.value = '';
-  });
+  }));
 }
 
 function fileToBase64_(file) {
@@ -889,12 +1072,22 @@ function renderPayments() {
     btn.addEventListener('click', () => openEditPaymentModal(btn.dataset.id));
   });
   el.querySelectorAll('[data-action="delete"]').forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', () => runLocked(btn, async () => {
       if (!confirm('確定要刪除這筆收款紀錄嗎？')) return;
-      const res = await apiPost('deletePayment', { paymentId: btn.dataset.id });
-      if (res.ok) { toast('已刪除'); await refreshData(); renderAll(); }
-      else toast('失敗：' + res.error);
-    });
+      const paymentId = btn.dataset.id;
+      const paymentSnapshot = (STATE.payments || []).find(x => x.PaymentID === paymentId);
+      const res = await apiPost('deletePayment', { paymentId });
+      if (res.ok) {
+        pushHistory({
+          label: `刪除收款 ${fmtMoney(paymentSnapshot ? paymentSnapshot.Amount : 0)}`,
+          undo: () => apiPost('restorePayment', paymentSnapshot),
+          redo: () => apiPost('deletePayment', { paymentId })
+        });
+        toast('已刪除'); await refreshData(); renderAll();
+      } else {
+        toast('失敗：' + res.error);
+      }
+    }));
   });
 }
 
@@ -908,12 +1101,22 @@ function openEditPaymentModal(paymentId) {
       <button class="btn btn-primary" id="btn-save-payment">儲存</button>
     </div>
   `);
-  document.getElementById('btn-save-payment').addEventListener('click', async () => {
+  const saveBtn = document.getElementById('btn-save-payment');
+  saveBtn.addEventListener('click', () => runLocked(saveBtn, async () => {
+    const prevAmount = payment.Amount;
     const amount = Number(document.getElementById('ep-amount').value || 0);
     const res = await apiPost('updatePayment', { paymentId, amount });
-    if (res.ok) { toast('已儲存'); closeModal(); await refreshData(); renderAll(); }
-    else toast('失敗：' + res.error);
-  });
+    if (res.ok) {
+      pushHistory({
+        label: `編輯收款金額`,
+        undo: () => apiPost('updatePayment', { paymentId, amount: prevAmount }),
+        redo: () => apiPost('updatePayment', { paymentId, amount })
+      });
+      toast('已儲存'); closeModal(); await refreshData(); renderAll();
+    } else {
+      toast('失敗：' + res.error);
+    }
+  }));
 }
 
 function openAssignPaymentModal(paymentId) {
@@ -954,18 +1157,37 @@ function openAssignPaymentModal(paymentId) {
       <button class="btn btn-ghost" id="btn-ignore-payment">忽略此筆</button>
     </div>
   `);
-  document.getElementById('btn-confirm-assign').addEventListener('click', async () => {
+  const confirmBtn = document.getElementById('btn-confirm-assign');
+  confirmBtn.addEventListener('click', () => runLocked(confirmBtn, async () => {
     const selected = document.querySelector('input[name="assign-bill"]:checked');
     if (!selected) { toast('請先選擇一筆帳單'); return; }
-    const res = await apiPost('assignPayment', { paymentId, billId: selected.value });
-    if (res.ok) { toast('已核銷完成'); closeModal(); await refreshData(); renderAll(); }
-    else toast('失敗：' + res.error);
-  });
-  document.getElementById('btn-ignore-payment').addEventListener('click', async () => {
+    const billId = selected.value;
+    const res = await apiPost('assignPayment', { paymentId, billId });
+    if (res.ok) {
+      pushHistory({
+        label: `核銷收款 ${fmtMoney(payment.Amount)}`,
+        undo: () => apiPost('unassignPayment', { paymentId }),
+        redo: () => apiPost('assignPayment', { paymentId, billId })
+      });
+      toast('已核銷完成'); closeModal(); await refreshData(); renderAll();
+    } else {
+      toast('失敗：' + res.error);
+    }
+  }));
+  const ignoreBtn = document.getElementById('btn-ignore-payment');
+  ignoreBtn.addEventListener('click', () => runLocked(ignoreBtn, async () => {
     const res = await apiPost('ignorePayment', { paymentId });
-    if (res.ok) { toast('已忽略'); closeModal(); await refreshData(); renderAll(); }
-    else toast('失敗：' + res.error);
-  });
+    if (res.ok) {
+      pushHistory({
+        label: `忽略收款 ${fmtMoney(payment.Amount)}`,
+        undo: () => apiPost('unignorePayment', { paymentId }),
+        redo: () => apiPost('ignorePayment', { paymentId })
+      });
+      toast('已忽略'); closeModal(); await refreshData(); renderAll();
+    } else {
+      toast('失敗：' + res.error);
+    }
+  }));
 }
 
 /* ============================================================
@@ -978,11 +1200,20 @@ function initReportsTab() {
   document.getElementById('report-month').addEventListener('change', renderReports);
   document.getElementById('report-year').addEventListener('change', renderReports);
   document.getElementById('btn-add-expense').addEventListener('click', () => openExpenseForm());
-  document.getElementById('btn-save-price').addEventListener('click', async () => {
-    const val = document.getElementById('setting-elec-price').value;
-    const res = await apiPost('updateSetting', { key: 'ElecUnitPrice', value: Number(val) });
-    if (res.ok) { toast('電費單價已更新'); await refreshData(); renderAll(); }
-  });
+  const savePriceBtn = document.getElementById('btn-save-price');
+  savePriceBtn.addEventListener('click', () => runLocked(savePriceBtn, async () => {
+    const prevValue = STATE.settings ? STATE.settings.ElecUnitPrice : 5.5;
+    const val = Number(document.getElementById('setting-elec-price').value);
+    const res = await apiPost('updateSetting', { key: 'ElecUnitPrice', value: val });
+    if (res.ok) {
+      pushHistory({
+        label: `電費單價改為 $${val}`,
+        undo: () => apiPost('updateSetting', { key: 'ElecUnitPrice', value: prevValue }),
+        redo: () => apiPost('updateSetting', { key: 'ElecUnitPrice', value: val })
+      });
+      toast('電費單價已更新'); await refreshData(); renderAll();
+    }
+  }));
 }
 
 function renderReports() {
@@ -1031,12 +1262,22 @@ function renderReports() {
       btn.addEventListener('click', () => openExpenseForm(btn.dataset.id));
     });
     expEl.querySelectorAll('.delete-expense').forEach(btn => {
-      btn.addEventListener('click', async () => {
+      btn.addEventListener('click', () => runLocked(btn, async () => {
         if (!confirm('確定要刪除這筆支出嗎？')) return;
-        const res = await apiPost('deleteExpense', { expenseId: btn.dataset.id });
-        if (res.ok) { toast('已刪除'); await refreshData(); renderAll(); }
-        else toast('失敗：' + res.error);
-      });
+        const expenseId = btn.dataset.id;
+        const expenseSnapshot = (STATE.expenses || []).find(x => x.ExpenseID === expenseId);
+        const res = await apiPost('deleteExpense', { expenseId });
+        if (res.ok) {
+          pushHistory({
+            label: `刪除支出 ${fmtMoney(expenseSnapshot ? expenseSnapshot.Amount : 0)}`,
+            undo: () => apiPost('restoreExpense', expenseSnapshot),
+            redo: () => apiPost('deleteExpense', { expenseId })
+          });
+          toast('已刪除'); await refreshData(); renderAll();
+        } else {
+          toast('失敗：' + res.error);
+        }
+      }));
     });
   }
 }
@@ -1060,7 +1301,8 @@ function openExpenseForm(expenseId) {
       ${isEdit ? '<button class="btn btn-danger" id="btn-del-expense">刪除</button>' : ''}
     </div>
   `);
-  document.getElementById('btn-save-expense').addEventListener('click', async () => {
+  const saveBtn = document.getElementById('btn-save-expense');
+  saveBtn.addEventListener('click', () => runLocked(saveBtn, async () => {
     const data = {
       date: document.getElementById('ex-date').value,
       category: document.getElementById('ex-category').value,
@@ -1068,18 +1310,51 @@ function openExpenseForm(expenseId) {
       note: document.getElementById('ex-note').value.trim()
     };
     if (!data.amount) { toast('請輸入金額'); return; }
-    const res = isEdit
-      ? await apiPost('updateExpense', { ...data, expenseId })
-      : await apiPost('addExpense', data);
-    if (res.ok) { toast('已儲存'); closeModal(); await refreshData(); renderAll(); }
-    else toast('失敗：' + res.error);
-  });
+
+    if (isEdit) {
+      const prevPayload = { expenseId, date: String(ex.Date).slice(0, 10), category: ex.Category, amount: ex.Amount, note: ex.Note };
+      const res = await apiPost('updateExpense', { ...data, expenseId });
+      if (res.ok) {
+        pushHistory({
+          label: `編輯支出`,
+          undo: () => apiPost('updateExpense', prevPayload),
+          redo: () => apiPost('updateExpense', { ...data, expenseId })
+        });
+        toast('已儲存'); closeModal(); await refreshData(); renderAll();
+      } else {
+        toast('失敗：' + res.error);
+      }
+    } else {
+      const res = await apiPost('addExpense', data);
+      if (res.ok) {
+        const newExpenseId = res.result.expenseId;
+        pushHistory({
+          label: `新增支出 ${fmtMoney(data.amount)}`,
+          undo: () => apiPost('deleteExpense', { expenseId: newExpenseId }),
+          redo: () => apiPost('addExpense', data)
+        });
+        toast('已儲存'); closeModal(); await refreshData(); renderAll();
+      } else {
+        toast('失敗：' + res.error);
+      }
+    }
+  }));
+
   if (isEdit) {
-    document.getElementById('btn-del-expense').addEventListener('click', async () => {
+    const delBtn = document.getElementById('btn-del-expense');
+    delBtn.addEventListener('click', () => runLocked(delBtn, async () => {
       if (!confirm('確定要刪除這筆支出嗎？')) return;
       const res = await apiPost('deleteExpense', { expenseId });
-      if (res.ok) { toast('已刪除'); closeModal(); await refreshData(); renderAll(); }
-      else toast('失敗：' + res.error);
-    });
+      if (res.ok) {
+        pushHistory({
+          label: `刪除支出 ${fmtMoney(ex.Amount)}`,
+          undo: () => apiPost('restoreExpense', ex),
+          redo: () => apiPost('deleteExpense', { expenseId })
+        });
+        toast('已刪除'); closeModal(); await refreshData(); renderAll();
+      } else {
+        toast('失敗：' + res.error);
+      }
+    }));
   }
 }
