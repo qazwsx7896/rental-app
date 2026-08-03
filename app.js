@@ -100,6 +100,7 @@ async function refreshData() {
 function renderAll() {
   renderDashboard();
   renderRooms();
+  renderBatchMeterTable();
   renderMeterRoomOptions();
   renderMeterRecentBills();
   renderPayments();
@@ -201,6 +202,60 @@ function renderDashboard() {
  * ============================================================ */
 function initRoomsTab() {
   document.getElementById('fab-add-room').addEventListener('click', () => openRoomForm(null));
+  document.getElementById('btn-monthly-rent-overview').addEventListener('click', openMonthlyRentOverviewModal);
+}
+
+function openMonthlyRentOverviewModal() {
+  const rooms = (STATE.rooms || []).slice().sort((a, b) => String(a.RoomNo).localeCompare(String(b.RoomNo)));
+  if (rooms.length === 0) {
+    openModal('本月租金總覽', `<div class="empty-state"><div class="icon">🛏️</div><div class="msg">尚未新增房間</div></div>`);
+    return;
+  }
+  openModal('本月租金總覽', `
+    <div class="hint" style="margin-bottom:10px;">預設全部勾選，不需要這次收租的房間，取消勾選就好；月數可依實際情況調整</div>
+    <div id="rent-overview-list">
+      ${rooms.map(r => {
+        const cycleDefault = r.RentCycle === '雙月繳' ? 2 : (r.RentCycle === '季繳' ? 3 : 1);
+        return `
+        <label class="card" style="display:block;cursor:pointer;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <input type="checkbox" class="rent-overview-check" data-room="${r.RoomNo}" checked style="width:18px;height:18px;flex-shrink:0;">
+            <div style="flex:1;">
+              <div style="font-weight:700;">${r.RoomNo} 房 · ${r.TenantName || '空房'}</div>
+              <div class="hint">每月 $${r.RentAmount || 0}（${r.RentCycle || ''}）· 已繳至 ${r.NextRentDueDate || '未設定'}</div>
+            </div>
+            <div style="width:70px;">
+              <input type="number" min="1" value="${cycleDefault}" class="rent-overview-months" data-room="${r.RoomNo}"
+                style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--line);text-align:center;">
+            </div>
+          </div>
+        </label>`;
+      }).join('')}
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-confirm-rent-overview">產生勾選房間的租金帳單</button>
+    </div>
+    <div id="rent-overview-status" class="hint" style="margin-top:8px;"></div>
+  `);
+
+  document.getElementById('btn-confirm-rent-overview').addEventListener('click', async () => {
+    const checks = Array.from(document.querySelectorAll('.rent-overview-check')).filter(c => c.checked);
+    if (checks.length === 0) { toast('沒有勾選任何房間'); return; }
+    const statusEl = document.getElementById('rent-overview-status');
+    let successCount = 0;
+    for (const check of checks) {
+      const roomNo = check.dataset.room;
+      const monthsInput = document.querySelector(`.rent-overview-months[data-room="${roomNo}"]`);
+      const months = Number(monthsInput.value || 1);
+      statusEl.textContent = `處理中… ${roomNo} 房`;
+      const res = await apiPost('generateRentBill', { roomNo, months });
+      if (res.ok) successCount++;
+    }
+    statusEl.textContent = `完成！已產生 ${successCount} 筆租金帳單`;
+    toast(`已產生 ${successCount} 筆租金帳單`);
+    await refreshData();
+    renderAll();
+  });
 }
 
 function renderRooms() {
@@ -368,6 +423,98 @@ function initMeterTab() {
     updateRentPreview();
   });
   document.getElementById('meter-rent-months').addEventListener('input', updateRentPreview);
+
+  document.getElementById('btn-batch-generate').addEventListener('click', runBatchMeterGenerate);
+}
+
+function renderBatchMeterTable() {
+  const rooms = (STATE.rooms || []).slice().sort((a, b) => String(a.RoomNo).localeCompare(String(b.RoomNo)));
+  const el = document.getElementById('batch-meter-table');
+  if (rooms.length === 0) {
+    el.innerHTML = `<div class="empty-state"><div class="icon">🛏️</div><div class="msg">尚未新增房間</div></div>`;
+    return;
+  }
+  el.innerHTML = rooms.map((r, i) => `
+    <div class="card" style="padding:10px 12px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div style="width:56px;font-weight:700;">${r.RoomNo}</div>
+        <div style="flex:1;font-size:12.5px;color:var(--ink-soft);">上次 ${r.LastMeterReading || 0} 度</div>
+        <input type="number" inputmode="decimal" enterkeyhint="next"
+          class="batch-meter-input" data-room="${r.RoomNo}" data-index="${i}"
+          placeholder="本次讀數" style="width:110px;padding:9px;border-radius:8px;border:1px solid var(--line);text-align:right;">
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding-left:64px;">
+        <input type="checkbox" class="batch-rent-check" data-room="${r.RoomNo}" style="width:16px;height:16px;">
+        <label style="margin:0;font-size:12.5px;">順便收租</label>
+        <input type="number" min="1" value="1" class="batch-rent-months" data-room="${r.RoomNo}"
+          style="width:50px;padding:6px;border-radius:6px;border:1px solid var(--line);text-align:center;font-size:12.5px;display:none;">
+      </div>
+    </div>`).join('');
+
+  // Enter / 下一步 直接跳到下一列的電表輸入框，比照電腦鍵盤 Enter 操作習慣
+  el.querySelectorAll('.batch-meter-input').forEach((input, idx, all) => {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const next = all[idx + 1];
+        if (next) next.focus();
+      }
+    });
+  });
+
+  el.querySelectorAll('.batch-rent-check').forEach(box => {
+    box.addEventListener('change', () => {
+      const monthsInput = el.querySelector(`.batch-rent-months[data-room="${box.dataset.room}"]`);
+      monthsInput.style.display = box.checked ? 'inline-block' : 'none';
+    });
+  });
+}
+
+async function runBatchMeterGenerate() {
+  const inputs = Array.from(document.querySelectorAll('.batch-meter-input')).filter(i => i.value !== '');
+  if (inputs.length === 0) { toast('請至少輸入一間房間的電表數字'); return; }
+
+  const resultsEl = document.getElementById('batch-meter-results');
+  resultsEl.innerHTML = '';
+  let successCount = 0;
+
+  for (const input of inputs) {
+    const roomNo = input.dataset.room;
+    const newReading = input.value;
+    const rentCheck = document.querySelector(`.batch-rent-check[data-room="${roomNo}"]`);
+    const rentMonths = rentCheck && rentCheck.checked
+      ? Number(document.querySelector(`.batch-rent-months[data-room="${roomNo}"]`).value || 1)
+      : 0;
+
+    const res = await apiPost('recordMeterAndBill', { roomNo, newReading, rentMonths });
+    if (res.ok) {
+      successCount++;
+      const r = res.result;
+      resultsEl.insertAdjacentHTML('beforeend', `
+        <div class="bill-ticket">
+          <div class="ticket-title">📋 ${roomNo} 房帳單已產生</div>
+          <pre>${r.billText}</pre>
+          <button class="btn btn-primary btn-copy-batch" data-text="${encodeURIComponent(r.billText)}" style="margin-top:12px;">📋 一鍵複製到 LINE</button>
+        </div>`);
+    } else {
+      resultsEl.insertAdjacentHTML('beforeend', `
+        <div class="card" style="border-color:var(--danger);">
+          <div style="font-weight:700;color:var(--danger);">${roomNo} 房失敗</div>
+          <div class="hint">${res.error}</div>
+        </div>`);
+    }
+  }
+
+  resultsEl.querySelectorAll('.btn-copy-batch').forEach(btn => {
+    btn.addEventListener('click', () => copyBillText(decodeURIComponent(btn.dataset.text)));
+  });
+
+  toast(`已產生 ${successCount} 筆帳單`);
+  document.querySelectorAll('.batch-meter-input').forEach(i => i.value = '');
+  document.querySelectorAll('.batch-rent-check').forEach(c => c.checked = false);
+  document.querySelectorAll('.batch-rent-months').forEach(m => m.style.display = 'none');
+  await refreshData();
+  renderAll();
 }
 
 function updateRentPreview() {
