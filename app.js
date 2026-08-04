@@ -1326,7 +1326,7 @@ function openExpenseForm(expenseId) {
     <div class="field">
       <label>分類</label>
       <select id="ex-category">
-        ${['廣告刊登', '維修保養', '清潔耗材', '稅金規費', '其他雜項'].map(c =>
+        ${['電費', '水費', '廣告刊登', '維修保養', '清潔耗材', '稅金規費', '其他雜項'].map(c =>
           `<option ${ex && ex.Category === c ? 'selected' : ''}>${c}</option>`).join('')}
       </select>
     </div>
