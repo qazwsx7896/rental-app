@@ -590,6 +590,9 @@ function initMeterTab() {
   document.getElementById('btn-batch-generate').addEventListener('click', function () {
     runLocked(this, runBatchMeterGenerate);
   });
+
+  document.getElementById('bill-filter-room').addEventListener('change', renderMeterRecentBills);
+  document.getElementById('bill-filter-status').addEventListener('change', renderMeterRecentBills);
 }
 
 function renderBatchMeterTable() {
@@ -860,38 +863,54 @@ function buildFallbackBillText(bill) {
 }
 
 function renderMeterRecentBills() {
+  // 填入房間篩選選單（保留使用者目前選的值）
+  const roomFilterEl = document.getElementById('bill-filter-room');
+  const currentRoomFilter = roomFilterEl.value;
+  const rooms = (STATE.rooms || []).slice().sort((a, b) => String(a.RoomNo).localeCompare(String(b.RoomNo)));
+  roomFilterEl.innerHTML = '<option value="">全部房間</option>' +
+    rooms.map(r => `<option value="${r.RoomNo}">${r.RoomNo} 房</option>`).join('');
+  roomFilterEl.value = currentRoomFilter;
+
+  const roomFilter = roomFilterEl.value;
+  const statusFilter = document.getElementById('bill-filter-status').value;
   const showMerged = document.getElementById('meter-show-merged') &&
     document.getElementById('meter-show-merged').checked;
+
   const allBills = (STATE.bills || []).slice().sort((a, b) => new Date(b.CreatedAt) - new Date(a.CreatedAt));
   const mergedCount = allBills.filter(b => String(b.Status).indexOf('已合併') === 0).length;
-  const bills = (showMerged ? allBills : allBills.filter(b => String(b.Status).indexOf('已合併') !== 0)).slice(0, 15);
+
+  let bills = showMerged ? allBills : allBills.filter(b => String(b.Status).indexOf('已合併') !== 0);
+  if (roomFilter) bills = bills.filter(b => String(b.RoomNo) === String(roomFilter));
+  if (statusFilter) bills = bills.filter(b => b.Status === statusFilter);
 
   const el = document.getElementById('meter-recent-bills');
   const toggleHtml = mergedCount > 0 ? `
-    <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-soft);margin-bottom:8px;cursor:pointer;">
+    <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-soft);margin:8px 0;cursor:pointer;">
       <input type="checkbox" id="meter-show-merged" ${showMerged ? 'checked' : ''} style="width:14px;height:14px;">
       顯示已合併的舊帳單紀錄（共 ${mergedCount} 筆，正常情況下不需要處理）
     </label>` : '';
+  const countHtml = `<div class="hint" style="margin-bottom:8px;">共 ${bills.length} 筆</div>`;
 
   if (bills.length === 0) {
-    el.innerHTML = toggleHtml + `<div class="empty-state"><div class="icon">⚡</div><div class="msg">尚無帳單紀錄</div></div>`;
-    if (document.getElementById('meter-show-merged')) {
-      document.getElementById('meter-show-merged').addEventListener('change', renderMeterRecentBills);
-    }
+    el.innerHTML = toggleHtml + countHtml + `<div class="empty-state"><div class="icon">⚡</div><div class="msg">沒有符合條件的帳單</div></div>`;
+    bindBillListEvents_(el);
     return;
   }
-  el.innerHTML = toggleHtml + bills.map(b => {
+  el.innerHTML = toggleHtml + countHtml + bills.map(b => {
     const statusBadge = b.Status === '待繳'
       ? '<span class="badge warn">待繳</span>'
       : (String(b.Status).indexOf('已合併') === 0
         ? '<span class="badge neutral">已合併（歷史紀錄，不用處理）</span>'
         : '<span class="badge success">已繳</span>');
+    const paidAtLine = b.Status === '已繳' && b.PaidAt
+      ? `<div class="hint">繳費日期：${String(b.PaidAt).slice(0, 10)}</div>` : '';
     return `
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div>
             <div style="font-weight:700;">${b.RoomNo} 房 · ${b.Type}</div>
             <div class="hint">${b.PeriodLabel}</div>
+            ${paidAtLine}
           </div>
           <div style="text-align:right;">
             <div class="num" style="font-weight:800;">${fmtMoney(b.Amount)}</div>
@@ -906,10 +925,13 @@ function renderMeterRecentBills() {
         </div>
       </div>`;
   }).join('');
+  bindBillListEvents_(el);
+}
+
+function bindBillListEvents_(el) {
   if (document.getElementById('meter-show-merged')) {
     document.getElementById('meter-show-merged').addEventListener('change', renderMeterRecentBills);
   }
-
   el.querySelectorAll('.copy-bill').forEach(btn => {
     btn.addEventListener('click', () => {
       const bill = (STATE.bills || []).find(x => x.BillID === btn.dataset.id);
