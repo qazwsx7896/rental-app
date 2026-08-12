@@ -96,7 +96,23 @@
       <button class="btn btn-primary" id="btn-calc-bill" style="margin-top:10px;">計算並產生帳單</button>
     </div>
     <div id="meter-result"></div>
-    <div class="section-title">近期帳單紀錄</div>
+    <div class="section-title">帳單紀錄查詢</div>
+    <div class="card">
+      <div class="field-row">
+        <div class="field">
+          <label>房間</label>
+          <select id="bill-filter-room"><option value="">全部房間</option></select>
+        </div>
+        <div class="field">
+          <label>狀態</label>
+          <select id="bill-filter-status">
+            <option value="">全部狀態</option>
+            <option value="待繳">待繳</option>
+            <option value="已繳">已繳</option>
+          </select>
+        </div>
+      </div>
+    </div>
     <div id="meter-recent-bills"></div>
   </section>
 
